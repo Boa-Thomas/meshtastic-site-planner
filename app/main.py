@@ -10,8 +10,10 @@ Endpoints:
     - /result/{task_id}: Retrieves the result (GeoTIFF file) of a given prediction task.
 """
 
+import asyncio
 import redis
-from fastapi import FastAPI, BackgroundTasks
+from concurrent.futures import ThreadPoolExecutor
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -34,6 +36,9 @@ splat_service = Splat(splat_path="/app/splat")
 # Initialize FastAPI app
 app = FastAPI()
 
+# Limit to 2 concurrent SPLAT! simulations to avoid overloading the server
+splat_executor = ThreadPoolExecutor(max_workers=2)
+
 # Add CORS middleware to allow requests from your frontend
 app.add_middleware(
     CORSMiddleware,
@@ -43,27 +48,20 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
-def run_splat(task_id: str, request: CoveragePredictionRequest):
+async def run_splat_async(task_id: str, request: CoveragePredictionRequest):
     """
-    Execute the SPLAT! coverage prediction and store the resulting GeoTIFF data in Redis.
+    Execute the SPLAT! coverage prediction off the event loop and store the result in Redis.
 
     Args:
         task_id (str): UUID identifier for the task.
         request (CoveragePredictionRequest): The parameters for the SPLAT! prediction.
-
-    Workflow:
-        - Runs the SPLAT! coverage prediction.
-        - Stores the resulting GeoTIFF data and the task status ("completed") in Redis.
-        - On failure, stores the task status as "failed" and logs the error in Redis.
-
-    Raises:
-        Exception: If SPLAT! fails during execution.
     """
+    loop = asyncio.get_running_loop()
     try:
         logger.info(f"Starting SPLAT! coverage prediction for task {task_id}.")
-        geotiff_data = splat_service.coverage_prediction(request)
-
-        # Log before storing in Redis
+        geotiff_data = await loop.run_in_executor(
+            splat_executor, splat_service.coverage_prediction, request
+        )
         logger.info(f"Storing result in Redis for task {task_id}")
         redis_client.setex(task_id, 3600, geotiff_data)
         redis_client.setex(f"{task_id}:status", 3600, "completed")
@@ -72,28 +70,26 @@ def run_splat(task_id: str, request: CoveragePredictionRequest):
         logger.error(f"Error in SPLAT! task {task_id}: {e}")
         redis_client.setex(f"{task_id}:status", 3600, "failed")
         redis_client.setex(f"{task_id}:error", 3600, str(e))
-        raise
 
 @app.post("/predict")
-async def predict(payload: CoveragePredictionRequest, background_tasks: BackgroundTasks) -> JSONResponse:
+async def predict(payload: CoveragePredictionRequest) -> JSONResponse:
     """
     Predict signal coverage using SPLAT!.
-    Accepts a CoveragePredictionRequest and processes it in the background.
+    Accepts a CoveragePredictionRequest and processes it asynchronously.
 
     - Generates a unique task ID.
     - Sets the initial task status to "processing" in Redis.
-    - Adds the `run_splat` function to the background task queue.
+    - Schedules the SPLAT! run via the thread-pool executor (max 2 concurrent).
 
     Args:
         payload (CoveragePredictionRequest): The parameters required for the SPLAT! coverage prediction.
-        background_tasks (BackgroundTasks): FastAPI background tasks.
 
     Returns:
         JSONResponse: A response containing the unique task ID to track the prediction progress.
     """
     task_id = str(uuid4())
     redis_client.setex(f"{task_id}:status", 3600, "processing")
-    background_tasks.add_task(run_splat, task_id, payload)
+    asyncio.create_task(run_splat_async(task_id, payload))
     return JSONResponse({"task_id": task_id})
 
 @app.get("/status/{task_id}")

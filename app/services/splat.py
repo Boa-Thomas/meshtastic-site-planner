@@ -6,6 +6,7 @@ import io
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, List, Tuple
 from rasterio.transform import Affine
 
@@ -139,9 +140,6 @@ class Splat:
             try:
                 logger.debug(f"Temporary directory created: {tmpdir}")
 
-                # FIXME: Eventually support high-resolution terrain data
-                request.high_resolution = False
-
                 # Set hard limit of 100 km radius
                 if request.radius > 100000:
                     logger.debug(f"User tried to set radius of {request.radius} meters, setting to 100 km.")
@@ -150,13 +148,17 @@ class Splat:
                 # determine the required terrain tiles
                 required_tiles = Splat._calculate_required_terrain_tiles(request.lat, request.lon, request.radius)
 
-                # download and convert terrain tiles to SPLAT! sdf
-                for tile_name, sdf_name, sdf_hd_name in required_tiles:
+                # download and convert terrain tiles to SPLAT! sdf (in parallel)
+                def _download_and_convert(args):
+                    tile_name, sdf_name, sdf_hd_name = args
                     tile_data = self._download_terrain_tile(tile_name)
                     sdf_data = self._convert_hgt_to_sdf(tile_data, tile_name, high_resolution=request.high_resolution)
+                    return (sdf_hd_name if request.high_resolution else sdf_name, sdf_data)
 
-                    with open(os.path.join(tmpdir, sdf_hd_name if request.high_resolution else sdf_name), "wb") as sdf_file:
-                        sdf_file.write(sdf_data)
+                with ThreadPoolExecutor(max_workers=min(8, len(required_tiles))) as executor:
+                    for filename, sdf_data in executor.map(_download_and_convert, required_tiles):
+                        with open(os.path.join(tmpdir, filename), "wb") as f:
+                            f.write(sdf_data)
 
                 # write transmitter / qth file
                 with open(os.path.join(tmpdir, "tx.qth"), "wb") as qth_file:
@@ -239,7 +241,7 @@ class Splat:
                     with open(os.path.join(tmpdir, "output.kml"), "rb") as kml_file:
                         ppm_data = ppm_file.read()
                         kml_data = kml_file.read()
-                        geotiff_data = Splat._create_splat_geotiff(ppm_data,kml_data,request.colormap,request.min_dbm,request.max_dbm)
+                        geotiff_data = Splat._create_splat_geotiff(ppm_data, kml_data)
 
                 logger.info("SPLAT! coverage prediction completed successfully.")
                 return geotiff_data
@@ -497,24 +499,17 @@ class Splat:
 
 
     @staticmethod
-    def _create_splat_geotiff(
-            ppm_bytes: bytes,
-            kml_bytes: bytes,
-            colormap_name: str,
-            min_dbm: float,
-            max_dbm: float,
-            null_value: int = 255  # Define the null value for transparency
-    ) -> bytes:
+    def _create_splat_geotiff(ppm_bytes: bytes, kml_bytes: bytes) -> bytes:
         """
-        Generate GeoTIFF file content from SPLAT! PPM and KML data, with transparency for null areas.
+        Generate GeoTIFF file content from SPLAT! PPM and KML data.
+
+        Reads the PPM as RGB and writes a 4-band (RGBA) GeoTIFF, preserving the
+        exact colours produced by SPLAT! via the .dcf file. Black pixels (0,0,0)
+        are treated as no-signal areas and written with alpha=0 (transparent).
 
         Args:
             ppm_bytes (bytes): Binary content of the SPLAT-generated PPM file.
             kml_bytes (bytes): Binary content of the KML file containing geospatial bounds.
-            colormap_name (str): Name of the matplotlib colormap to use for the GeoTIFF.
-            min_dbm (float): Minimum dBm value for the colormap scale.
-            max_dbm (float): Maximum dBm value for the colormap scale.
-            null_value (int): Pixel value in the PPM that represents null areas. Defaults to 255.
 
         Returns:
             bytes: The binary content of the resulting GeoTIFF file.
@@ -540,54 +535,42 @@ class Splat:
                 f"Extracted bounding box: north={north}, south={south}, east={east}, west={west}"
             )
 
-            # Read PPM content
-            logger.debug("Reading PPM content.")
+            # Read PPM as RGB — preserve exact SPLAT! colours from the .dcf file
+            logger.debug("Reading PPM content as RGB.")
             with Image.open(io.BytesIO(ppm_bytes)) as img:
-                img_array = np.array(
-                    img.convert("L")
-                )  # Convert to single-channel grayscale
-                img_array = np.clip(img_array, 0, 255).astype("uint8")
+                img_rgb = np.array(img.convert("RGB"))  # H x W x 3
 
-            logger.debug(f"PPM image dimensions: {img_array.shape}")
+            logger.debug(f"PPM image dimensions: {img_rgb.shape[:2]}")
 
-            # Mask null values
-            img_array = np.where(img_array == null_value, 255, img_array)  # Optionally set to 0
-            no_data_value = null_value
+            # Black pixels (0,0,0) mean no signal — set alpha=0 (transparent)
+            is_nodata = (
+                (img_rgb[:, :, 0] == 0) &
+                (img_rgb[:, :, 1] == 0) &
+                (img_rgb[:, :, 2] == 0)
+            )
+            alpha = np.where(is_nodata, 0, 255).astype("uint8")
 
-            # Create GeoTIFF using Rasterio
-            height, width = img_array.shape
+            height, width = img_rgb.shape[:2]
             transform = from_bounds(west, south, east, north, width, height)
             logger.debug(f"GeoTIFF transform matrix: {transform}")
 
-            # Generate colormap with transparency
-            cmap = plt.get_cmap(colormap_name, 256)  # colormap with 256 levels
-            cmap_norm = plt.Normalize(vmin=min_dbm, vmax=max_dbm)  # Normalize based on dBm range
-            cmap_values = np.linspace(min_dbm, max_dbm, 255)
-
-            # Map data values to RGB for visible colors
-            rgb_colors = (cmap(cmap_norm(cmap_values))[:, :3] * 255).astype(int)
-
-            # Initialize GDAL-compatible colormap with transparency for null values
-            gdal_colormap = {i: tuple(rgb) + (255,) for i, rgb in enumerate(rgb_colors)}
-
-            # Write GeoTIFF to memory
+            # Write 4-band RGBA GeoTIFF to memory
             with io.BytesIO() as buffer:
                 with rasterio.open(
-                        buffer,
-                        "w",
-                        driver="GTiff",
-                        height=height,
-                        width=width,
-                        count=1,  # Single-band data
-                        dtype="uint8",
-                        crs="EPSG:4326",
-                        transform=transform,
-                        photometric="palette",  # Colormap interpretation
-                        compress="lzw",
-                        nodata=no_data_value,  # Set NoData value
+                    buffer, "w",
+                    driver="GTiff",
+                    height=height,
+                    width=width,
+                    count=4,
+                    dtype="uint8",
+                    crs="EPSG:4326",
+                    transform=transform,
+                    compress="lzw",
                 ) as dst:
-                    dst.write(img_array, 1)  # Write the raster data
-                    dst.write_colormap(1, gdal_colormap)  # Attach the colormap
+                    dst.write(img_rgb[:, :, 0], 1)  # R
+                    dst.write(img_rgb[:, :, 1], 2)  # G
+                    dst.write(img_rgb[:, :, 2], 3)  # B
+                    dst.write(alpha, 4)              # Alpha
 
                 buffer.seek(0)
                 geotiff_bytes = buffer.read()
@@ -710,7 +693,7 @@ class Splat:
                                     1201,   # Downsampled height
                                     1201,   # Downsampled width
                                 ),
-                                resampling=Resampling.average,
+                                resampling=Resampling.bilinear,
                             )
 
                             # Update metadata for the new dataset
