@@ -59,12 +59,17 @@
             </ul>
             </li>
             </ul>
-            <div class="mt-3 d-flex gap-2">
+            <div class="mt-3 d-flex gap-2 flex-wrap">
               <button :disabled="store.simulationState === 'running'" @click="store.runSimulation" type="button" class="btn btn-success btn-sm" id="runSimulation">
                 <span :class="{ 'd-none': store.simulationState !== 'running' }" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
                 <span class="button-text">{{ buttonText() }}</span>
               </button>
+              <button :disabled="store.localSites.length === 0 || exporting" @click="handleExport" type="button" class="btn btn-outline-light btn-sm">
+                <span v-if="exporting" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                <span>{{ exporting ? 'Exporting…' : 'Export PDF' }}</span>
+              </button>
             </div>
+            <div v-if="exportError" class="mt-2 text-danger small">{{ exportError }}</div>
             <ul class="list-group mt-3">
               <li class="list-group-item d-flex justify-content-between align-items-center" v-for="(site, index) in store.$state.localSites" :key="site.taskId">
                 <span>{{ site.params.transmitter.name }}</span>
@@ -90,8 +95,27 @@ import Environment from "./components/Environment.vue"
 import Simulation from "./components/Simulation.vue"
 import Display from "./components/Display.vue"
 
+import { ref } from 'vue'
 import { useStore } from './store.ts'
+import { exportPDF } from './exportPDF.ts'
+
 const store = useStore()
+const exporting = ref(false)
+const exportError = ref('')
+
+async function handleExport() {
+  exporting.value = true
+  exportError.value = ''
+  try {
+    await exportPDF(store.localSites)
+  } catch (e) {
+    console.error('PDF export failed:', e)
+    exportError.value = e instanceof Error ? e.message : 'Export failed'
+  } finally {
+    exporting.value = false
+  }
+}
+
 const buttonText = () => {
   if ('running' === store.simulationState) {
     return 'Running'

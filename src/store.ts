@@ -8,6 +8,7 @@ import 'leaflet-easyprint';
 import { type Site, type SplatParams } from './types.ts';
 import { cloneObject } from './utils.ts';
 import { redPinMarker } from './layers.ts';
+import { saveSite, loadSites, deleteSite } from './storage.ts';
 
 const useStore = defineStore('store', {
   state() {
@@ -16,6 +17,8 @@ const useStore = defineStore('store', {
       currentMarker: undefined as undefined | L.Marker,
       localSites: [] as Site[], //useLocalStorage('localSites', ),
       simulationState: 'idle',
+      simulationError: '' as string,
+      pollTimeoutId: null as ReturnType<typeof setTimeout> | null,
       splatParams: <SplatParams>{
         transmitter: {
           name: randanimalSync(),
@@ -64,7 +67,9 @@ const useStore = defineStore('store', {
       if (!this.map) {
         return
       }
+      const taskId = this.localSites[index].taskId;
       this.localSites.splice(index, 1)
+      deleteSite(taskId);
       this.map.eachLayer((layer: L.Layer) => {
         if (layer instanceof GeoRasterLayer) {
           this.map!.removeLayer(layer);
@@ -88,8 +93,7 @@ const useStore = defineStore('store', {
       this.localSites.forEach((site: Site) => {
         const rasterLayer = new GeoRasterLayer({
           georaster: {...site}.raster,
-          opacity: 0.7,
-          noDataValue: 255,
+          opacity: (100 - this.splatParams.display.overlay_transparency) / 100,
           resolution: 256,
         });
         rasterLayer.addTo(this.map as L.Map);
@@ -151,9 +155,28 @@ const useStore = defineStore('store', {
       });
       this.currentMarker = L.marker(position, { icon: redPinMarker }).addTo(this.map as L.Map).bindPopup("Transmitter site"); // Variable to hold the current marker
       this.redrawSites();
+      this.initSites();
+    },
+    async initSites() {
+      try {
+        const stored = await loadSites();
+        for (const { taskId, params, geotiff } of stored) {
+          const geoRaster = await parseGeoraster(geotiff);
+          this.localSites.push({ taskId, params, raster: geoRaster });
+        }
+        if (stored.length > 0) this.redrawSites();
+      } catch (error) {
+        console.error('Failed to restore sites from IndexedDB:', error);
+      }
     },
     async runSimulation() {
       console.log('Simulation running...')
+      // Cancel any in-flight poll from a previous run
+      if (this.pollTimeoutId !== null) {
+        clearTimeout(this.pollTimeoutId);
+        this.pollTimeoutId = null;
+      }
+      this.simulationError = '';
       try {
         // Collect input values
         const payload = {
@@ -228,19 +251,19 @@ const useStore = defineStore('store', {
           console.log("Task status:", statusData);
     
           if (statusData.status === "completed") {
+            this.pollTimeoutId = null;
             this.simulationState = 'completed';
             console.log("Simulation completed! Adding result to the map...");
 
             // Fetch the GeoTIFF data
-            const resultResponse = await fetch(
-              `/result/${taskId}`,
-            );
+            const resultResponse = await fetch(`/result/${taskId}`);
             if (!resultResponse.ok) {
               throw new Error("Failed to fetch simulation result.");
             }
             else
             {
               const arrayBuffer = await resultResponse.arrayBuffer();
+              await saveSite(taskId, cloneObject(this.splatParams), arrayBuffer);
               const geoRaster = await parseGeoraster(arrayBuffer);
               this.localSites.push({
                 params: cloneObject(this.splatParams),
@@ -253,9 +276,18 @@ const useStore = defineStore('store', {
             }
           }
           else if (statusData.status === "failed") {
+            this.pollTimeoutId = null;
             this.simulationState = 'failed';
+            // Fetch error message from the result endpoint
+            try {
+              const errResponse = await fetch(`/result/${taskId}`);
+              const errData = await errResponse.json();
+              this.simulationError = errData.error || 'Simulation failed';
+            } catch {
+              this.simulationError = 'Simulation failed';
+            }
           } else {
-            setTimeout(pollStatus, pollInterval); // Retry after interval
+            this.pollTimeoutId = setTimeout(pollStatus, pollInterval);
           }
         };
     

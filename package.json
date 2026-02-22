@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc -b && vite build && cp -r public/* app/ui",
+    "build": "vue-tsc -b && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -13,6 +13,7 @@
     "bootstrap": "^5.3.8",
     "georaster": "^1.6.0",
     "georaster-layer-for-leaflet": "4.1.2",
+    "jspdf": "^4.2.0",
     "leaflet": "^1.9.4",
     "leaflet-easyprint": "^2.1.9",
     "leaflet.locatecontrol": "^0.82.0",
