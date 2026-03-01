@@ -21,6 +21,7 @@ function addTestNodes(nodesStore: ReturnType<typeof useNodesStore>) {
 
 describe('desStore', () => {
   beforeEach(() => {
+    localStorage.clear()
     setActivePinia(createPinia())
   })
 

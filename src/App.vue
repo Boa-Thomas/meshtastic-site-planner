@@ -102,6 +102,17 @@
                     <!-- Node list -->
                     <NodeList />
 
+                    <!-- Run All Coverage button -->
+                    <button
+                      v-if="nodesStore.nodes.length > 0"
+                      class="btn btn-sm btn-success w-100 mt-2"
+                      :disabled="nodesStore.nodes.length === 0 || runAllState === 'running'"
+                      @click="onRunAllCoverage"
+                    >
+                      <span v-if="runAllState === 'running'" class="spinner-border spinner-border-sm me-1"></span>
+                      {{ runAllState === 'running' ? `Coverage ${runAllProgress.current}/${runAllProgress.total}...` : 'Run All Coverage' }}
+                    </button>
+
                     <!-- Node editor (shown when a node is selected) -->
                     <div v-if="nodesStore.selectedNode" class="mt-3 border-top border-secondary pt-3">
                       <NodeEditor @runCoverage="onRunNodeCoverage" />
@@ -165,7 +176,7 @@ import "leaflet/dist/leaflet.css"
 import "bootstrap/dist/css/bootstrap.min.css"
 import "bootstrap/dist/js/bootstrap.bundle.min.js"
 import L from 'leaflet'
-import { markRaw } from 'vue'
+import { markRaw, ref, watch } from 'vue'
 import { reactive } from 'vue'
 
 import Transmitter from "./components/Transmitter.vue"
@@ -199,6 +210,10 @@ useDesVisualization()
 // Track Leaflet markers for each mesh node by node ID
 const nodeMarkers = new Map<string, L.Marker>()
 
+// Run All Coverage state
+const runAllState = ref<'idle' | 'running'>('idle')
+const runAllProgress = ref({ current: 0, total: 0 })
+
 const buttonText = () => {
   if ('running' === sitesStore.simulationState) {
     return 'Running'
@@ -214,6 +229,43 @@ const openPanels = reactive(new Set(['transmitter', 'display']))
 const togglePanel = (name: string) => {
   openPanels.has(name) ? openPanels.delete(name) : openPanels.add(name)
 }
+
+// --- Sync marker popups when node names change ---
+
+watch(
+  () => nodesStore.nodes.map(n => ({ id: n.id, name: n.name })),
+  (nodeNames) => {
+    for (const { id, name } of nodeNames) {
+      const marker = nodeMarkers.get(id)
+      if (marker) {
+        marker.setPopupContent(name)
+      }
+    }
+  },
+  { deep: true }
+)
+
+// --- Restore markers for persisted nodes after map init ---
+
+watch(
+  () => mapStore.map,
+  (map) => {
+    if (!map) return
+    for (const node of nodesStore.nodes) {
+      if (nodeMarkers.has(node.id)) continue
+      const marker = markRaw(
+        L.marker([node.lat, node.lon], { icon: meshNodeMarker })
+          .addTo(map as L.Map)
+          .bindPopup(node.name)
+      )
+      marker.on('click', () => {
+        nodesStore.selectedNodeId = node.id
+      })
+      nodeMarkers.set(node.id, marker)
+    }
+  },
+  { immediate: true }
+)
 
 // --- Mesh Node placement logic ---
 
@@ -269,13 +321,16 @@ function onMapClickForNode(e: L.LeafletMouseEvent) {
 
 // --- Coverage simulation for a specific mesh node ---
 
-async function onRunNodeCoverage(nodeId: string) {
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function onRunNodeCoverage(nodeId: string): Promise<void> {
   const node = nodesStore.nodeById(nodeId)
   if (!node) return
 
   const splatParams = nodeToSplatParams(node)
 
-  // Reuse the existing simulation payload logic from sitesStore
   const payload = {
     lat: splatParams.transmitter.tx_lat,
     lon: splatParams.transmitter.tx_lon,
@@ -316,7 +371,10 @@ async function onRunNodeCoverage(nodeId: string) {
 
     const { task_id: taskId } = await predictResponse.json()
 
-    const poll = async () => {
+    // Await-based polling loop
+    while (true) {
+      await sleep(1000)
+
       const statusResponse = await fetch(`/status/${taskId}`)
       if (!statusResponse.ok) return
       const { status } = await statusResponse.json()
@@ -328,25 +386,39 @@ async function onRunNodeCoverage(nodeId: string) {
         const arrayBuffer = await resultResponse.arrayBuffer()
         const geoRaster = await parseGeoraster(arrayBuffer)
 
-        // Push a new site entry so the coverage overlay renders on the map
         sitesStore.localSites.push({
           params: cloneObject(splatParams),
           taskId,
           raster: geoRaster,
         })
         sitesStore.redrawSites()
-
-        // Record the task ID on the node so NodeList shows the RF badge
         nodesStore.updateNode(nodeId, { siteId: taskId })
-      } else if (status !== 'failed') {
-        setTimeout(poll, 1000)
+        return
+      } else if (status === 'failed') {
+        console.error('Node coverage simulation failed for', nodeId)
+        return
       }
     }
-
-    poll()
   } catch (err) {
     console.error('Error running node coverage:', err)
   }
+}
+
+// --- Run All Coverage ---
+
+async function onRunAllCoverage() {
+  const pending = nodesStore.nodes.filter(n => !n.siteId)
+  if (pending.length === 0) return
+
+  runAllState.value = 'running'
+  runAllProgress.value = { current: 0, total: pending.length }
+
+  for (const node of pending) {
+    runAllProgress.value.current++
+    await onRunNodeCoverage(node.id)
+  }
+
+  runAllState.value = 'idle'
 }
 </script>
 

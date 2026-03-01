@@ -1,6 +1,15 @@
 <template>
   <div v-if="node">
-    <h6 class="text-light mb-3">{{ node.name }}</h6>
+    <!-- Editable node name -->
+    <div class="mb-2">
+      <label class="form-label">Node Name</label>
+      <input
+        type="text"
+        class="form-control form-control-sm"
+        :value="node.name"
+        @input="nodesStore.updateNode(node!.id, { name: ($event.target as HTMLInputElement).value })"
+      />
+    </div>
 
     <!-- Device preset -->
     <DevicePresetSelector
@@ -16,43 +25,17 @@
       />
     </div>
 
-    <!-- TX / RX parameters -->
+    <!-- Essential parameters (always visible) -->
     <div class="row g-2 mt-2">
       <div class="col-6">
-        <label class="form-label">TX Power (W)</label>
+        <label class="form-label">Antenna Height (m)</label>
         <input
           type="number"
           class="form-control form-control-sm"
-          :value="node.txPowerW"
-          min="0.001"
-          step="0.01"
-          @input="nodesStore.updateNode(node!.id, { txPowerW: parseFloat(($event.target as HTMLInputElement).value) })"
-        />
-      </div>
-      <div class="col-6">
-        <label class="form-label">Frequency (MHz)</label>
-        <input
-          type="number"
-          class="form-control form-control-sm"
-          :value="node.frequencyMhz"
-          min="100"
-          max="1000"
-          step="0.1"
-          @input="nodesStore.updateNode(node!.id, { frequencyMhz: parseFloat(($event.target as HTMLInputElement).value) })"
-        />
-      </div>
-    </div>
-
-    <div class="row g-2 mt-2">
-      <div class="col-6">
-        <label class="form-label">TX Height (m)</label>
-        <input
-          type="number"
-          class="form-control form-control-sm"
-          :value="node.txHeight"
+          :value="node.antennaHeight"
           min="0.5"
           step="0.5"
-          @input="nodesStore.updateNode(node!.id, { txHeight: parseFloat(($event.target as HTMLInputElement).value) })"
+          @input="nodesStore.updateNode(node!.id, { antennaHeight: parseFloat(($event.target as HTMLInputElement).value) })"
         />
       </div>
       <div class="col-6">
@@ -69,60 +52,111 @@
       </div>
     </div>
 
-    <div class="row g-2 mt-2">
-      <div class="col-6">
-        <label class="form-label">RX Sensitivity (dBm)</label>
-        <input
-          type="number"
-          class="form-control form-control-sm"
-          :value="node.rxSensitivityDbm"
-          max="0"
-          step="1"
-          @input="nodesStore.updateNode(node!.id, { rxSensitivityDbm: parseFloat(($event.target as HTMLInputElement).value) })"
+    <!-- Advanced toggle -->
+    <a
+      href="#"
+      class="small text-info d-block mt-2"
+      @click.prevent="showAdvanced = !showAdvanced"
+    >
+      {{ showAdvanced ? 'Hide Advanced' : 'Show Advanced' }}
+    </a>
+
+    <!-- Advanced parameters (collapsible) -->
+    <div v-if="showAdvanced">
+      <div class="row g-2 mt-1">
+        <div class="col-6">
+          <label class="form-label">TX Power (W)</label>
+          <input
+            type="number"
+            class="form-control form-control-sm"
+            :value="node.txPowerW"
+            min="0.001"
+            step="0.01"
+            @input="nodesStore.updateNode(node!.id, { txPowerW: parseFloat(($event.target as HTMLInputElement).value) })"
+          />
+        </div>
+        <div class="col-6">
+          <label class="form-label">Frequency (MHz)</label>
+          <input
+            type="number"
+            class="form-control form-control-sm"
+            :value="node.frequencyMhz"
+            min="100"
+            max="1000"
+            step="0.1"
+            @input="nodesStore.updateNode(node!.id, { frequencyMhz: parseFloat(($event.target as HTMLInputElement).value) })"
+          />
+        </div>
+      </div>
+
+      <div class="row g-2 mt-2">
+        <div class="col-6">
+          <label class="form-label">RX Sensitivity (dBm)</label>
+          <input
+            type="number"
+            class="form-control form-control-sm"
+            :value="node.rxSensitivityDbm"
+            max="0"
+            step="1"
+            @input="nodesStore.updateNode(node!.id, { rxSensitivityDbm: parseFloat(($event.target as HTMLInputElement).value) })"
+          />
+        </div>
+        <div class="col-6">
+          <label class="form-label">RX Gain (dBi)</label>
+          <input
+            type="number"
+            class="form-control form-control-sm"
+            :value="node.rxGainDbi"
+            step="0.5"
+            @input="nodesStore.updateNode(node!.id, { rxGainDbi: parseFloat(($event.target as HTMLInputElement).value) })"
+          />
+        </div>
+      </div>
+
+      <div class="row g-2 mt-2">
+        <div class="col-6">
+          <label class="form-label">RX Loss (dB)</label>
+          <input
+            type="number"
+            class="form-control form-control-sm"
+            :value="node.rxLossDb"
+            min="0"
+            step="0.5"
+            @input="nodesStore.updateNode(node!.id, { rxLossDb: parseFloat(($event.target as HTMLInputElement).value) })"
+          />
+        </div>
+      </div>
+
+      <!-- Installation type + obstruction -->
+      <div class="mt-2">
+        <InstallationConfig
+          :installationType="node.installationType"
+          :obstructionLevel="node.obstructionLevel"
+          @update:installationType="v => nodesStore.updateNode(node!.id, { installationType: v })"
+          @update:obstructionLevel="v => nodesStore.updateNode(node!.id, { obstructionLevel: v })"
         />
       </div>
-      <div class="col-6">
-        <label class="form-label">RX Height (m)</label>
-        <input
-          type="number"
-          class="form-control form-control-sm"
-          :value="node.rxHeight"
-          min="0.5"
-          step="0.5"
-          @input="nodesStore.updateNode(node!.id, { rxHeight: parseFloat(($event.target as HTMLInputElement).value) })"
+
+      <!-- Antenna preset + orientation + directional params -->
+      <div class="mt-2">
+        <AntennaConfig
+          :orientation="node.antennaOrientation"
+          :gainDbi="node.txGainDbi"
+          :azimuth="node.directionalParams?.azimuth ?? 0"
+          :beamwidth="node.directionalParams?.beamwidth ?? 60"
+          @update:orientation="v => nodesStore.updateNode(node!.id, { antennaOrientation: v })"
+          @update:gainDbi="v => nodesStore.updateNode(node!.id, { txGainDbi: v })"
+          @update:azimuth="v => nodesStore.updateNode(node!.id, {
+            directionalParams: { azimuth: v, beamwidth: node!.directionalParams?.beamwidth ?? 60 }
+          })"
+          @update:beamwidth="v => nodesStore.updateNode(node!.id, {
+            directionalParams: { azimuth: node!.directionalParams?.azimuth ?? 0, beamwidth: v }
+          })"
         />
       </div>
     </div>
 
-    <!-- Installation type + obstruction -->
-    <div class="mt-2">
-      <InstallationConfig
-        :installationType="node.installationType"
-        :obstructionLevel="node.obstructionLevel"
-        @update:installationType="v => nodesStore.updateNode(node!.id, { installationType: v })"
-        @update:obstructionLevel="v => nodesStore.updateNode(node!.id, { obstructionLevel: v })"
-      />
-    </div>
-
-    <!-- Antenna preset + orientation + directional params -->
-    <div class="mt-2">
-      <AntennaConfig
-        :orientation="node.antennaOrientation"
-        :gainDbi="node.txGainDbi"
-        :azimuth="node.directionalParams?.azimuth ?? 0"
-        :beamwidth="node.directionalParams?.beamwidth ?? 60"
-        @update:orientation="v => nodesStore.updateNode(node!.id, { antennaOrientation: v })"
-        @update:gainDbi="v => nodesStore.updateNode(node!.id, { txGainDbi: v })"
-        @update:azimuth="v => nodesStore.updateNode(node!.id, {
-          directionalParams: { azimuth: v, beamwidth: node!.directionalParams?.beamwidth ?? 60 }
-        })"
-        @update:beamwidth="v => nodesStore.updateNode(node!.id, {
-          directionalParams: { azimuth: node!.directionalParams?.azimuth ?? 0, beamwidth: v }
-        })"
-      />
-    </div>
-
-    <!-- Action buttons -->
+    <!-- Action buttons (always visible) -->
     <div class="mt-3 d-flex gap-2">
       <button class="btn btn-success btn-sm" @click="$emit('runCoverage', node!.id)">
         Run Coverage
@@ -139,7 +173,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useNodesStore } from '../stores/nodesStore'
 import DevicePresetSelector from './DevicePresetSelector.vue'
 import ChannelPresetSelector from './ChannelPresetSelector.vue'
@@ -151,6 +185,7 @@ defineEmits<{ runCoverage: [nodeId: string] }>()
 
 const nodesStore = useNodesStore()
 const node = computed(() => nodesStore.selectedNode)
+const showAdvanced = ref(false)
 
 function onDeviceChange(presetId: string) {
   if (!node.value) return

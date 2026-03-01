@@ -27,6 +27,11 @@ export function useDesVisualization() {
     return [node.lat, node.lon]
   }
 
+  function addTempLayer(layer: L.Layer, removeAfterMs: number) {
+    tempLayers.push(layer)
+    setTimeout(() => layer.remove(), removeAfterMs)
+  }
+
   function visualizeEvent(event: SimEvent) {
     if (!mapStore.map) return
 
@@ -48,10 +53,20 @@ export function useDesVisualization() {
           className: 'des-pulse',
         }).addTo(map))
 
-        tempLayers.push(circle)
+        addTempLayer(circle, 1500)
 
-        // Auto-remove after animation
-        setTimeout(() => circle.remove(), 1500)
+        // Hop count label
+        const hopLabel = markRaw(
+          L.tooltip({
+            permanent: true,
+            direction: 'right',
+            className: 'des-hop-label',
+          })
+            .setLatLng(coords)
+            .setContent(`hop ${event.packet.currentHopCount}`)
+        )
+        hopLabel.addTo(map)
+        addTempLayer(hopLabel, 1500)
         break
       }
 
@@ -76,8 +91,20 @@ export function useDesVisualization() {
           className: 'des-line-animate',
         }).addTo(map))
 
-        tempLayers.push(line)
-        setTimeout(() => line.remove(), 2000)
+        // RSSI tooltip at midpoint
+        const rssi = event.packet.rssiAtReceiver
+        const snr = event.packet.snrAtReceiver
+        if (rssi !== undefined) {
+          const labelParts = [`${rssi.toFixed(0)} dBm`]
+          if (snr !== undefined) labelParts.push(`SNR ${snr.toFixed(0)} dB`)
+          line.bindTooltip(labelParts.join(' / '), {
+            permanent: true,
+            direction: 'center',
+            className: 'des-packet-label',
+          })
+        }
+
+        addTempLayer(line, 2000)
         break
       }
 
@@ -95,8 +122,7 @@ export function useDesVisualization() {
           className: 'des-collision',
         }).addTo(map))
 
-        tempLayers.push(marker)
-        setTimeout(() => marker.remove(), 2000)
+        addTempLayer(marker, 2000)
         break
       }
     }

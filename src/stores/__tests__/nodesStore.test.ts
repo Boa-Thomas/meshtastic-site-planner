@@ -6,6 +6,7 @@ import { channelPresets } from '../../data/channelPresets'
 
 describe('nodesStore', () => {
   beforeEach(() => {
+    localStorage.clear()
     setActivePinia(createPinia())
   })
 
@@ -90,10 +91,10 @@ describe('nodesStore', () => {
       const node = store.createDefaultNode(-23.55, -46.63, 'Node A')
       store.addNode(node)
 
-      store.updateNode(node.id, { txPowerDbm: 30, txHeight: 10 })
+      store.updateNode(node.id, { txPowerDbm: 30, antennaHeight: 10 })
 
       expect(store.nodes[0].txPowerDbm).toBe(30)
-      expect(store.nodes[0].txHeight).toBe(10)
+      expect(store.nodes[0].antennaHeight).toBe(10)
     })
 
     it('does nothing when the node id does not exist', () => {
@@ -155,10 +156,9 @@ describe('nodesStore', () => {
       expect(node.txPowerW).toBeCloseTo(0.158)
       expect(node.txPowerDbm).toBe(22)
       expect(node.frequencyMhz).toBe(915.0)
-      expect(node.txHeight).toBe(2.0)
       expect(node.txGainDbi).toBe(2.0)
+      expect(node.antennaHeight).toBe(2.0)
       expect(node.rxSensitivityDbm).toBe(-136)
-      expect(node.rxHeight).toBe(1.0)
       expect(node.rxGainDbi).toBe(2.0)
       expect(node.rxLossDb).toBe(2.0)
     })

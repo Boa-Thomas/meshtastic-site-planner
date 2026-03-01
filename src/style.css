@@ -60,3 +60,22 @@ body {
 .des-collision {
   animation: des-collision-flash 0.3s ease-in-out 3;
 }
+
+/* DES Packet labels on map */
+.des-packet-label {
+  background: rgba(0, 0, 0, 0.75) !important;
+  color: #fff !important;
+  border: none !important;
+  font-size: 11px;
+  padding: 2px 6px;
+  box-shadow: none !important;
+}
+
+.des-hop-label {
+  background: rgba(0, 0, 0, 0.6) !important;
+  color: #fff !important;
+  border: none !important;
+  font-size: 10px;
+  padding: 1px 4px;
+  box-shadow: none !important;
+}

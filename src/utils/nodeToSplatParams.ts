@@ -36,7 +36,7 @@ const clutterHeightM: Record<string, number> = {
  */
 export function nodeToSplatParams(node: MeshNode): SplatParams {
   const effectiveHeight =
-    node.txHeight * (installationHeightFactor[node.installationType] ?? 1.0)
+    node.antennaHeight * (installationHeightFactor[node.installationType] ?? 1.0)
 
   const extraLoss = obstructionLossDb[node.obstructionLevel] ?? 0
 
@@ -52,7 +52,7 @@ export function nodeToSplatParams(node: MeshNode): SplatParams {
     },
     receiver: {
       rx_sensitivity: node.rxSensitivityDbm,
-      rx_height: node.rxHeight,
+      rx_height: node.antennaHeight,
       rx_gain: node.rxGainDbi,
       rx_loss: node.rxLossDb + extraLoss,
     },

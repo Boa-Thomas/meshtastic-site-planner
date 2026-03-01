@@ -168,19 +168,18 @@ export interface MeshNode {
   /** Operating frequency in MHz */
   frequencyMhz: number
 
-  /** Transmitter antenna height above ground level (AGL) in metres */
-  txHeight: number
-
   /** Transmitter antenna gain in dBi */
   txGainDbi: number
+
+  // -- Antenna height -------------------------------------------------------
+
+  /** Antenna height above ground level (AGL) in metres */
+  antennaHeight: number
 
   // -- RX parameters --------------------------------------------------------
 
   /** Receiver sensitivity in dBm (at the active channel preset) */
   rxSensitivityDbm: number
-
-  /** Receiver antenna height AGL in metres */
-  rxHeight: number
 
   /** Receiver antenna gain in dBi */
   rxGainDbi: number

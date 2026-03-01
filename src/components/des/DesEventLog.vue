@@ -7,10 +7,23 @@
         :key="event.id"
         class="des-event-item small"
         :class="{ 'des-event-current': i === recentEvents.length - 1 }"
+        @click="toggleDetails(event.id)"
+        style="cursor: pointer"
       >
         <span class="badge me-1" :class="eventBadgeClass(event.type)">{{ eventTypeLabel(event.type) }}</span>
         <span class="text-muted">{{ event.time.toFixed(0) }}ms</span>
         <span class="ms-1">{{ eventDescription(event) }}</span>
+
+        <!-- Expandable details -->
+        <div v-if="selectedEventId === event.id" class="mt-1 ps-2 border-start border-info small text-muted" @click.stop>
+          <div>Packet ID: {{ event.packet.id.slice(0, 8) }}</div>
+          <div>Hop: {{ event.packet.currentHopCount }}/{{ event.packet.maxHopLimit }}</div>
+          <div v-if="event.packet.rssiAtReceiver !== undefined">RSSI: {{ event.packet.rssiAtReceiver.toFixed(1) }} dBm</div>
+          <div v-if="event.packet.snrAtReceiver !== undefined">SNR: {{ event.packet.snrAtReceiver.toFixed(1) }} dB</div>
+          <div>Payload: {{ event.packet.payloadSizeBytes }} bytes</div>
+          <div v-if="event.packet.retryCount > 0">Retries: {{ event.packet.retryCount }}</div>
+          <div v-if="event.packet.destinationNodeId">Dest: {{ nodeName(event.packet.destinationNodeId) }}</div>
+        </div>
       </div>
     </div>
   </div>
@@ -25,6 +38,7 @@ import { useNodesStore } from '../../stores/nodesStore'
 const desStore = useDesStore()
 const nodesStore = useNodesStore()
 const logContainer = ref<HTMLElement>()
+const selectedEventId = ref<number | null>(null)
 
 // Show last 50 events
 const recentEvents = computed(() => {
@@ -39,6 +53,10 @@ watch(() => desStore.eventCount, async () => {
     logContainer.value.scrollTop = logContainer.value.scrollHeight
   }
 })
+
+function toggleDetails(eventId: number) {
+  selectedEventId.value = selectedEventId.value === eventId ? null : eventId
+}
 
 function nodeName(id: string | undefined): string {
   if (!id) return '?'
@@ -78,15 +96,32 @@ function eventBadgeClass(type: EventType): string {
 function eventDescription(event: SimEvent): string {
   const src = nodeName(event.sourceNodeId)
   const tgt = nodeName(event.targetNodeId)
+  const rssi = event.packet.rssiAtReceiver
+  const snr = event.packet.snrAtReceiver
   switch (event.type) {
-    case 'message_send': return `${src} sends (hop ${event.packet.currentHopCount})`
-    case 'message_receive': return `${tgt} receives from ${src}`
-    case 'message_rebroadcast': return `${src} rebroadcasts (hop ${event.packet.currentHopCount})`
-    case 'ack_send': return `${src} sends ACK`
-    case 'ack_receive': return `${tgt} receives ACK`
-    case 'collision': return `Collision at ${tgt}`
-    case 'timeout': return `${src} ACK timeout`
-    default: return ''
+    case 'message_send':
+      return `${src} sends (hop ${event.packet.currentHopCount}, ${event.packet.payloadSizeBytes}B)`
+    case 'message_receive': {
+      const parts = [`${tgt} \u2190 ${src}`]
+      if (rssi !== undefined) parts.push(`RSSI ${rssi.toFixed(0)} dBm`)
+      if (snr !== undefined) parts.push(`SNR ${snr.toFixed(0)} dB`)
+      return parts.join(', ')
+    }
+    case 'message_rebroadcast':
+      return `${src} rebroadcasts (hop ${event.packet.currentHopCount})`
+    case 'ack_send':
+      return `${src} sends ACK`
+    case 'ack_receive': {
+      const parts = [`${tgt} ACK \u2190 ${src}`]
+      if (rssi !== undefined) parts.push(`RSSI ${rssi.toFixed(0)} dBm`)
+      return parts.join(', ')
+    }
+    case 'collision':
+      return `Collision at ${tgt} (from ${src})`
+    case 'timeout':
+      return `${src} ACK timeout (retry ${event.packet.retryCount})`
+    default:
+      return ''
   }
 }
 </script>
