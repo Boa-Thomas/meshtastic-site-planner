@@ -16,4 +16,19 @@ const chirpyMarker = L.divIcon({
   iconSize: [24, 40],
   iconAnchor: [12, 40],
 });
-export { chirpyMarker, redPinMarker };
+/**
+ * Marker icon for mesh nodes placed on the planning map.
+ * Rendered as a green filled circle with a white border so it stands out
+ * clearly against both light and satellite base layers.
+ */
+const meshNodeMarker = L.divIcon({
+  html: `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
+    <circle cx="10" cy="10" r="8" fill="#22c55e" stroke="#ffffff" stroke-width="2"/>
+    <circle cx="10" cy="10" r="3" fill="#ffffff"/>
+  </svg>`,
+  className: '',
+  iconSize: [20, 20],
+  iconAnchor: [10, 10],
+})
+
+export { chirpyMarker, redPinMarker, meshNodeMarker };

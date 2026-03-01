@@ -14,3 +14,49 @@ body {
 .spinner-border-sm {
     margin-right: 0.5rem; /* Optional: Add spacing between spinner and text */
 }
+
+/* DES Event Log */
+.des-event-log {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #495057;
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.des-event-item {
+  padding: 2px 4px;
+  border-bottom: 1px solid #343a40;
+}
+
+.des-event-current {
+  background-color: rgba(13, 110, 253, 0.15);
+}
+
+/* DES Map Animations */
+@keyframes des-pulse-anim {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+.des-pulse {
+  animation: des-pulse-anim 1.2s ease-out forwards;
+}
+
+@keyframes des-line-dash {
+  to { stroke-dashoffset: -20; }
+}
+
+.des-line-animate {
+  stroke-dasharray: 8 4;
+  animation: des-line-dash 0.5s linear infinite;
+}
+
+@keyframes des-collision-flash {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 0.2; }
+}
+
+.des-collision {
+  animation: des-collision-flash 0.3s ease-in-out 3;
+}

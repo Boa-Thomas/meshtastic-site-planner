@@ -29,6 +29,6 @@
 </template>
 
 <script setup lang="ts">
-    import { useStore } from '../store.ts'
-    const receiver = useStore().splatParams.receiver
+    import { useSitesStore } from '../stores/sitesStore'
+    const receiver = useSitesStore().splatParams.receiver
 </script>
