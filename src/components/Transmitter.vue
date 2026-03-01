@@ -53,47 +53,53 @@
 </template>
 
 <script setup lang="ts">
-    import L from 'leaflet';
-    import * as bootstrap from 'bootstrap';
-    import { useStore } from '../store.ts'
-    import { onMounted } from 'vue';
-    import { redPinMarker } from '../layers.ts';
-    const store = useStore();
-    const transmitter = store.splatParams.transmitter;
+    import L from 'leaflet'
+    import * as bootstrap from 'bootstrap'
+    import { useMapStore } from '../stores/mapStore'
+    import { useSitesStore } from '../stores/sitesStore'
+    import { onMounted } from 'vue'
+    import { redPinMarker } from '../layers'
+
+    const mapStore = useMapStore()
+    const sitesStore = useSitesStore()
+    const transmitter = sitesStore.splatParams.transmitter
 
     const centerMapOnTransmitter = () => {
         if (!isNaN(transmitter.tx_lat) && !isNaN(transmitter.tx_lon)) {
-            store.map!.setView([transmitter.tx_lat, transmitter.tx_lon], store.map!.getZoom()); // Center map on the coordinates
+            mapStore.map!.setView([transmitter.tx_lat, transmitter.tx_lon], mapStore.map!.getZoom()) // Center map on the coordinates
         } else {
-            alert("Please enter valid Latitude and Longitude values.");
+            alert('Please enter valid Latitude and Longitude values.')
         }
-    };
-    let popover = new bootstrap.Popover(document.createElement("input"), {
-        trigger: "manual",
-    });
+    }
+    let popover = new bootstrap.Popover(document.createElement('input'), {
+        trigger: 'manual',
+    })
 
     const setWithMap = () => {
-        popover.show();
-        store.map!.once("click", function (e: any) {
-            let { lat, lng } = e.latlng; // Get clicked location coordinates
-            lng = ((((lng + 180) % 360) + 360) % 360) - 180;
+        popover.show()
+        mapStore.map!.once('click', function (e: any) {
+            let { lat, lng } = e.latlng // Get clicked location coordinates
+            lng = ((((lng + 180) % 360) + 360) % 360) - 180
 
-            store.setTxCoords(parseFloat(lat.toFixed(6)), parseFloat(lng.toFixed(6))); // Update the store
+            sitesStore.setTxCoords(parseFloat(lat.toFixed(6)), parseFloat(lng.toFixed(6))) // Update the store
 
             // Remove the existing marker if it exists
-            if (store.currentMarker) {
-                store.map!.removeLayer(store.currentMarker as L.Marker);
+            if (mapStore.currentMarker) {
+                mapStore.map!.removeLayer(mapStore.currentMarker as L.Marker)
             }
             // Add a new marker at the clicked location
-            store.currentMarker = L.marker([lat, lng], { icon: redPinMarker }).addTo(store.map as L.Map)
-            popover.hide(); // Hide the popover
-        });
-    };
+            mapStore.currentMarker = L.marker([lat, lng], { icon: redPinMarker }).addTo(mapStore.map as L.Map)
+            popover.hide() // Hide the popover
+        })
+    }
     onMounted(() => {
-        popover = new bootstrap.Popover(document.getElementById("setWithMap") as Element, {
-            trigger: "manual",
-        });
-        store.initMap(document.getElementById("map") as HTMLElement); // Initialize the map
-    });
+        popover = new bootstrap.Popover(document.getElementById('setWithMap') as Element, {
+            trigger: 'manual',
+        })
+        mapStore.initMap(
+            document.getElementById('map') as HTMLElement,
+            [sitesStore.splatParams.transmitter.tx_lat, sitesStore.splatParams.transmitter.tx_lon]
+        ) // Initialize the map
+    })
 
 </script>

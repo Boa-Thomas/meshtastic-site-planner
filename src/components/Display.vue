@@ -50,6 +50,6 @@
 </template>
 
 <script setup lang="ts">
-import { useStore } from "../store.ts";
-const display = useStore().splatParams.display;
+import { useSitesStore } from '../stores/sitesStore'
+const display = useSitesStore().splatParams.display
 </script>

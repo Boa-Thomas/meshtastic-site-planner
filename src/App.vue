@@ -16,10 +16,11 @@
           </div>
           <div class="offcanvas-body">
             <ul class="navbar-nav">
+              <!-- 1. Site / Transmitter -->
               <li class="nav-item">
                 <a class="nav-link dropdown-toggle" href="#" role="button"
                    @click.prevent="togglePanel('transmitter')"
-                   :aria-expanded="openPanels.has('transmitter').toString()">Site / Transmitter</a>
+                   :aria-expanded="openPanels.has('transmitter')">Site / Transmitter</a>
                 <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('transmitter') }]"
                     style="position:static">
                   <li>
@@ -27,10 +28,12 @@
                   </li>
                 </ul>
               </li>
+
+              <!-- 2. Receiver -->
               <li class="nav-item">
                 <a class="nav-link dropdown-toggle" href="#" role="button"
                    @click.prevent="togglePanel('receiver')"
-                   :aria-expanded="openPanels.has('receiver').toString()">Receiver</a>
+                   :aria-expanded="openPanels.has('receiver')">Receiver</a>
                 <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('receiver') }]"
                     style="position:static">
                   <li>
@@ -38,10 +41,12 @@
                   </li>
                 </ul>
               </li>
+
+              <!-- 3. Environment -->
               <li class="nav-item">
                 <a class="nav-link dropdown-toggle" href="#" role="button"
                    @click.prevent="togglePanel('environment')"
-                   :aria-expanded="openPanels.has('environment').toString()">Environment</a>
+                   :aria-expanded="openPanels.has('environment')">Environment</a>
                 <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('environment') }]"
                     style="position:static">
                   <li>
@@ -49,10 +54,12 @@
                   </li>
                 </ul>
               </li>
+
+              <!-- 4. Simulation Options -->
               <li class="nav-item">
                 <a class="nav-link dropdown-toggle" href="#" role="button"
                    @click.prevent="togglePanel('simulation')"
-                   :aria-expanded="openPanels.has('simulation').toString()">Simulation Options</a>
+                   :aria-expanded="openPanels.has('simulation')">Simulation Options</a>
                 <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('simulation') }]"
                     style="position:static">
                   <li>
@@ -60,10 +67,12 @@
                   </li>
                 </ul>
               </li>
+
+              <!-- 5. Display -->
               <li class="nav-item">
                 <a class="nav-link dropdown-toggle" href="#" role="button"
                    @click.prevent="togglePanel('display')"
-                   :aria-expanded="openPanels.has('display').toString()">Display</a>
+                   :aria-expanded="openPanels.has('display')">Display</a>
                 <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('display') }]"
                     style="position:static">
                   <li>
@@ -71,25 +80,75 @@
                   </li>
                 </ul>
               </li>
+
+              <!-- 6. Mesh Nodes -->
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('meshNodes')"
+                   :aria-expanded="openPanels.has('meshNodes')">Mesh Nodes</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('meshNodes') }]"
+                    style="position:static">
+                  <li>
+                    <!-- Add Node button -->
+                    <button
+                      type="button"
+                      class="btn btn-sm mb-3 w-100"
+                      :class="nodesStore.isPlacingNode ? 'btn-warning' : 'btn-primary'"
+                      @click="toggleNodePlacement"
+                    >
+                      {{ nodesStore.isPlacingNode ? 'Click map to place node...' : 'Add Node' }}
+                    </button>
+
+                    <!-- Node list -->
+                    <NodeList />
+
+                    <!-- Node editor (shown when a node is selected) -->
+                    <div v-if="nodesStore.selectedNode" class="mt-3 border-top border-secondary pt-3">
+                      <NodeEditor @runCoverage="onRunNodeCoverage" />
+                    </div>
+                  </li>
+                </ul>
+              </li>
+
+              <!-- 7. Network Simulation (DES) -->
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('des')"
+                   :aria-expanded="openPanels.has('des')">Network Simulation (DES)</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('des') }]"
+                    style="position:static">
+                  <li>
+                    <DesControls />
+                    <div class="mt-3"><DesLinkOverlay /></div>
+                    <div class="mt-3"><DesMetrics /></div>
+                    <div class="mt-3"><DesEventLog /></div>
+                  </li>
+                </ul>
+              </li>
             </ul>
+
+            <!-- Run Simulation + Export buttons -->
             <div class="mt-3 d-flex gap-2">
-              <button :disabled="store.simulationState === 'running'" @click="store.runSimulation" type="button" class="btn btn-success btn-sm" id="runSimulation">
-                <span :class="{ 'd-none': store.simulationState !== 'running' }" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+              <button :disabled="sitesStore.simulationState === 'running'" @click="sitesStore.runSimulation" type="button" class="btn btn-success btn-sm" id="runSimulation">
+                <span :class="{ 'd-none': sitesStore.simulationState !== 'running' }" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
                 <span class="button-text">{{ buttonText() }}</span>
               </button>
-              <button :disabled="store.exportLoading" @click="store.exportMap" type="button" class="btn btn-secondary btn-sm">
-                <span :class="{ 'd-none': !store.exportLoading }" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+              <button :disabled="exportLoading" @click="exportMap" type="button" class="btn btn-secondary btn-sm">
+                <span :class="{ 'd-none': !exportLoading }" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
                 Export PDF
               </button>
             </div>
-            <div v-if="store.exportError" class="alert alert-warning alert-dismissible mt-2 py-1 px-2 small" role="alert">
-              {{ store.exportError }}
-              <button type="button" class="btn-close btn-sm" @click="store.exportError = ''" aria-label="Close"></button>
+
+            <div v-if="exportError" class="alert alert-warning alert-dismissible mt-2 py-1 px-2 small" role="alert">
+              {{ exportError }}
+              <button type="button" class="btn-close btn-sm" @click="exportError = ''" aria-label="Close"></button>
             </div>
+
+            <!-- Legacy site list (SPLAT! results from the main transmitter panel) -->
             <ul class="list-group mt-3">
-              <li class="list-group-item d-flex justify-content-between align-items-center" v-for="(site, index) in store.$state.localSites" :key="site.taskId">
+              <li class="list-group-item d-flex justify-content-between align-items-center" v-for="(site, index) in sitesStore.localSites" :key="site.taskId">
                 <span>{{ site.params.transmitter.name }}</span>
-                <button type="button" @click="store.removeSite(index)" class="btn-close" aria-label="Close"></button>
+                <button type="button" @click="sitesStore.removeSite(index)" class="btn-close" aria-label="Close"></button>
               </li>
             </ul>
           </div>
@@ -105,19 +164,45 @@
 import "leaflet/dist/leaflet.css"
 import "bootstrap/dist/css/bootstrap.min.css"
 import "bootstrap/dist/js/bootstrap.bundle.min.js"
+import L from 'leaflet'
+import { markRaw } from 'vue'
+import { reactive } from 'vue'
+
 import Transmitter from "./components/Transmitter.vue"
 import Receiver from "./components/Receiver.vue"
 import Environment from "./components/Environment.vue"
 import Simulation from "./components/Simulation.vue"
 import Display from "./components/Display.vue"
+import NodeList from "./components/NodeList.vue"
+import NodeEditor from "./components/NodeEditor.vue"
+import DesControls from "./components/des/DesControls.vue"
+import DesLinkOverlay from "./components/des/DesLinkOverlay.vue"
+import DesMetrics from "./components/des/DesMetrics.vue"
+import DesEventLog from "./components/des/DesEventLog.vue"
 
-import { reactive } from 'vue'
-import { useStore } from './store.ts'
-const store = useStore()
+import { useSitesStore } from './stores/sitesStore'
+import { useMapStore } from './stores/mapStore'
+import { useNodesStore } from './stores/nodesStore'
+import { useExport } from './composables/useExport'
+import { useDesVisualization } from './composables/useDesVisualization'
+import { meshNodeMarker } from './layers'
+import { nodeToSplatParams } from './utils/nodeToSplatParams'
+import { cloneObject } from './utils'
+import parseGeoraster from 'georaster'
+
+const sitesStore = useSitesStore()
+const mapStore = useMapStore()
+const nodesStore = useNodesStore()
+const { exportLoading, exportError, exportMap } = useExport()
+useDesVisualization()
+
+// Track Leaflet markers for each mesh node by node ID
+const nodeMarkers = new Map<string, L.Marker>()
+
 const buttonText = () => {
-  if ('running' === store.simulationState) {
+  if ('running' === sitesStore.simulationState) {
     return 'Running'
-  } else if ('failed' === store.simulationState) {
+  } else if ('failed' === sitesStore.simulationState) {
     return 'Failed'
   } else {
     return 'Run Simulation'
@@ -129,6 +214,140 @@ const openPanels = reactive(new Set(['transmitter', 'display']))
 const togglePanel = (name: string) => {
   openPanels.has(name) ? openPanels.delete(name) : openPanels.add(name)
 }
+
+// --- Mesh Node placement logic ---
+
+function toggleNodePlacement() {
+  if (nodesStore.isPlacingNode) {
+    nodesStore.stopPlacingNode()
+    if (mapStore.map) {
+      mapStore.map.getContainer().style.cursor = ''
+    }
+  } else {
+    nodesStore.startPlacingNode()
+    if (mapStore.map) {
+      mapStore.map.getContainer().style.cursor = 'crosshair'
+      mapStore.map.once('click', onMapClickForNode)
+    }
+  }
+}
+
+function onMapClickForNode(e: L.LeafletMouseEvent) {
+  if (!nodesStore.isPlacingNode) return
+
+  const lat = parseFloat(e.latlng.lat.toFixed(6))
+  let lon = e.latlng.lng
+  // Normalise longitude to [-180, 180]
+  lon = ((((lon + 180) % 360) + 360) % 360) - 180
+  lon = parseFloat(lon.toFixed(6))
+
+  const nodeCount = nodesStore.nodes.length + 1
+  const node = nodesStore.createDefaultNode(lat, lon, `Node ${nodeCount}`)
+  nodesStore.addNode(node)
+
+  // Place a marker on the map for this node
+  if (mapStore.map) {
+    const marker = markRaw(
+      L.marker([lat, lon], { icon: meshNodeMarker })
+        .addTo(mapStore.map as L.Map)
+        .bindPopup(node.name)
+    )
+    marker.on('click', () => {
+      nodesStore.selectedNodeId = node.id
+    })
+    nodeMarkers.set(node.id, marker)
+  }
+
+  nodesStore.stopPlacingNode()
+  if (mapStore.map) {
+    mapStore.map.getContainer().style.cursor = ''
+  }
+
+  // Auto-open Mesh Nodes panel so the editor is immediately visible
+  openPanels.add('meshNodes')
+}
+
+// --- Coverage simulation for a specific mesh node ---
+
+async function onRunNodeCoverage(nodeId: string) {
+  const node = nodesStore.nodeById(nodeId)
+  if (!node) return
+
+  const splatParams = nodeToSplatParams(node)
+
+  // Reuse the existing simulation payload logic from sitesStore
+  const payload = {
+    lat: splatParams.transmitter.tx_lat,
+    lon: splatParams.transmitter.tx_lon,
+    tx_height: splatParams.transmitter.tx_height,
+    tx_power: 10 * Math.log10(splatParams.transmitter.tx_power) + 30,
+    tx_gain: splatParams.transmitter.tx_gain,
+    frequency_mhz: splatParams.transmitter.tx_freq,
+    rx_height: splatParams.receiver.rx_height,
+    rx_gain: splatParams.receiver.rx_gain,
+    signal_threshold: splatParams.receiver.rx_sensitivity,
+    system_loss: splatParams.receiver.rx_loss,
+    clutter_height: splatParams.environment.clutter_height,
+    ground_dielectric: splatParams.environment.ground_dielectric,
+    ground_conductivity: splatParams.environment.ground_conductivity,
+    atmosphere_bending: splatParams.environment.atmosphere_bending,
+    radio_climate: splatParams.environment.radio_climate,
+    polarization: splatParams.environment.polarization,
+    radius: splatParams.simulation.simulation_extent * 1000,
+    situation_fraction: splatParams.simulation.situation_fraction,
+    time_fraction: splatParams.simulation.time_fraction,
+    high_resolution: splatParams.simulation.high_resolution,
+    colormap: splatParams.display.color_scale,
+    min_dbm: splatParams.display.min_dbm,
+    max_dbm: splatParams.display.max_dbm,
+  }
+
+  try {
+    const predictResponse = await fetch('/predict', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    if (!predictResponse.ok) {
+      const detail = await predictResponse.text()
+      console.error('Node coverage prediction failed:', detail)
+      return
+    }
+
+    const { task_id: taskId } = await predictResponse.json()
+
+    const poll = async () => {
+      const statusResponse = await fetch(`/status/${taskId}`)
+      if (!statusResponse.ok) return
+      const { status } = await statusResponse.json()
+
+      if (status === 'completed') {
+        const resultResponse = await fetch(`/result/${taskId}`)
+        if (!resultResponse.ok) return
+
+        const arrayBuffer = await resultResponse.arrayBuffer()
+        const geoRaster = await parseGeoraster(arrayBuffer)
+
+        // Push a new site entry so the coverage overlay renders on the map
+        sitesStore.localSites.push({
+          params: cloneObject(splatParams),
+          taskId,
+          raster: geoRaster,
+        })
+        sitesStore.redrawSites()
+
+        // Record the task ID on the node so NodeList shows the RF badge
+        nodesStore.updateNode(nodeId, { siteId: taskId })
+      } else if (status !== 'failed') {
+        setTimeout(poll, 1000)
+      }
+    }
+
+    poll()
+  } catch (err) {
+    console.error('Error running node coverage:', err)
+  }
+}
 </script>
 
 <style>
@@ -136,11 +355,4 @@ const togglePanel = (name: string) => {
   background: transparent;
   border: none !important;
 }
-/* .leaflet-layer,
-.leaflet-control-zoom-in,
-.leaflet-control-zoom-out,
-.leaflet-control-attribution {
-  filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
-} */
-
 </style>

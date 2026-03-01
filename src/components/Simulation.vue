@@ -32,6 +32,6 @@
 </template>
 
 <script setup lang="ts">
-import { useStore } from '../store.ts'
-const simulation = useStore().splatParams.simulation
+import { useSitesStore } from '../stores/sitesStore'
+const simulation = useSitesStore().splatParams.simulation
 </script>
