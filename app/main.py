@@ -10,17 +10,21 @@ Endpoints:
     - /result/{task_id}: Retrieves the result (GeoTIFF file) of a given prediction task.
 """
 
+import os
 import redis
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from uuid import uuid4
+from uuid import uuid4, UUID
+from starlette.requests import Request
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from app.services.splat import Splat
 from app.models.CoveragePredictionRequest import CoveragePredictionRequest
 import logging
 import io
-# import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,10 +38,20 @@ splat_service = Splat(splat_path="/app/splat")
 # Initialize FastAPI app
 app = FastAPI()
 
+# Rate limiter (per-IP, using remote address)
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Add CORS middleware to allow requests from your frontend
+allowed_origins = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173,https://site.meshtastic.org"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:*/", "http://site.meshtastic.org"],  # Replace '*' with specific origins like ["http://localhost:3000"] for security
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],  # Allow all HTTP methods
     allow_headers=["*"],  # Allow all headers
@@ -75,7 +89,8 @@ def run_splat(task_id: str, request: CoveragePredictionRequest):
         raise
 
 @app.post("/predict")
-async def predict(payload: CoveragePredictionRequest, background_tasks: BackgroundTasks) -> JSONResponse:
+@limiter.limit("5/minute")
+async def predict(request: Request, payload: CoveragePredictionRequest, background_tasks: BackgroundTasks) -> JSONResponse:
     """
     Predict signal coverage using SPLAT!.
     Accepts a CoveragePredictionRequest and processes it in the background.
@@ -97,7 +112,7 @@ async def predict(payload: CoveragePredictionRequest, background_tasks: Backgrou
     return JSONResponse({"task_id": task_id})
 
 @app.get("/status/{task_id}")
-async def get_status(task_id: str):
+async def get_status(task_id: UUID):
     """
     Retrieve the status of a given SPLAT! task.
 
@@ -106,20 +121,21 @@ async def get_status(task_id: str):
     - Returns a 404 error if the task ID is not found.
 
     Args:
-        task_id (str): The unique identifier for the task.
+        task_id (UUID): The unique identifier for the task.
 
     Returns:
         JSONResponse: The task status or an error message if the task is not found.
     """
-    status = redis_client.get(f"{task_id}:status")
+    tid = str(task_id)
+    status = redis_client.get(f"{tid}:status")
     if not status:
-        logger.warning(f"Task {task_id} not found in Redis.")
+        logger.warning(f"Task {tid} not found in Redis.")
         return JSONResponse({"error": "Task not found"}, status_code=404)
 
-    return JSONResponse({"task_id": task_id, "status": status.decode("utf-8")})
+    return JSONResponse({"task_id": tid, "status": status.decode("utf-8")})
 
 @app.get("/result/{task_id}")
-async def get_result(task_id: str):
+async def get_result(task_id: UUID):
     """
     Retrieve SPLAT! task status or GeoTIFF result.
 
@@ -129,35 +145,36 @@ async def get_result(task_id: str):
     - If "processing", indicate the same in the response.
 
     Args:
-        task_id (str): The unique identifier for the task.
+        task_id (UUID): The unique identifier for the task.
 
     Returns:
         JSONResponse: Task status if the task is still "processing" or "failed."
         StreamingResponse: A downloadable GeoTIFF file if the task is "completed."
     """
-    status = redis_client.get(f"{task_id}:status")
+    tid = str(task_id)
+    status = redis_client.get(f"{tid}:status")
     if not status:
-        logger.warning(f"Task {task_id} not found in Redis.")
+        logger.warning(f"Task {tid} not found in Redis.")
         return JSONResponse({"error": "Task not found"}, status_code=404)
 
     status = status.decode("utf-8")
     if status == "completed":
-        geotiff_data = redis_client.get(task_id)
+        geotiff_data = redis_client.get(tid)
         if not geotiff_data:
-            logger.error(f"No data found for completed task {task_id}.")
+            logger.error(f"No data found for completed task {tid}.")
             return JSONResponse({"error": "No result found"}, status_code=500)
 
         geotiff_file = io.BytesIO(geotiff_data)
         return StreamingResponse(
             geotiff_file,
             media_type="image/tiff",
-            headers={"Content-Disposition": f"attachment; filename={task_id}.tif"}
+            headers={"Content-Disposition": f"attachment; filename={tid}.tif"}
         )
     elif status == "failed":
-        error = redis_client.get(f"{task_id}:error")
+        error = redis_client.get(f"{tid}:error")
         return JSONResponse({"status": "failed", "error": error.decode("utf-8")})
 
-    logger.info(f"Task {task_id} is still processing.")
+    logger.info(f"Task {tid} is still processing.")
     return JSONResponse({"status": "processing"})
 
 app.mount("/", StaticFiles(directory="app/ui", html=True), name="ui")

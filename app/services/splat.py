@@ -569,6 +569,7 @@ class Splat:
 
             # Initialize GDAL-compatible colormap with transparency for null values
             gdal_colormap = {i: tuple(rgb) + (255,) for i, rgb in enumerate(rgb_colors)}
+            gdal_colormap[null_value] = (0, 0, 0, 0)  # noData → fully transparent
 
             # Write GeoTIFF to memory
             with io.BytesIO() as buffer:

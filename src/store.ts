@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia';
+import { markRaw } from 'vue';
 // import { useLocalStorage } from '@vueuse/core';
 import { randanimalSync } from 'randanimal';
 import L from 'leaflet';
 import GeoRasterLayer from 'georaster-layer-for-leaflet';
 import parseGeoraster from 'georaster';
-import 'leaflet-easyprint';
+import html2canvas from 'html2canvas';
 import { type Site, type SplatParams } from './types.ts';
 import { cloneObject } from './utils.ts';
 import { redPinMarker } from './layers.ts';
@@ -13,9 +14,13 @@ const useStore = defineStore('store', {
   state() {
     return {
       map: undefined as undefined | L.Map,
+      mapContainer: undefined as undefined | HTMLElement,
+      currentBaseLayer: 'OSM' as string,
       currentMarker: undefined as undefined | L.Marker,
       localSites: [] as Site[], //useLocalStorage('localSites', ),
       simulationState: 'idle',
+      exportError: '' as string,
+      exportLoading: false,
       splatParams: <SplatParams>{
         transmitter: {
           name: randanimalSync(),
@@ -61,44 +66,180 @@ const useStore = defineStore('store', {
       this.splatParams.transmitter.tx_lon = lon
     },
     removeSite(index: number) {
-      if (!this.map) {
-        return
+      if (!this.map) return;
+      const site = this.localSites[index];
+      if (site.rasterLayer) {
+        this.map.removeLayer(site.rasterLayer);
       }
-      this.localSites.splice(index, 1)
-      this.map.eachLayer((layer: L.Layer) => {
-        if (layer instanceof GeoRasterLayer) {
-          this.map!.removeLayer(layer);
-        }
-      });
-      this.redrawSites()
+      this.localSites.splice(index, 1);
     },
     redrawSites() {
-      if (!this.map) {
-        return;
-      }
-
-      // Remove existing GeoRasterLayers
-      this.map.eachLayer((layer: L.Layer) => {
-        if (layer instanceof GeoRasterLayer) {
-          this.map!.removeLayer(layer);
-        }
-      });
-
-      // Add GeoRasterLayers back to the map
+      if (!this.map) return;
       this.localSites.forEach((site: Site) => {
-        const rasterLayer = new GeoRasterLayer({
-          georaster: {...site}.raster,
-          opacity: 0.7,
-          noDataValue: 255,
-          resolution: 256,
-        });
-        rasterLayer.addTo(this.map as L.Map);
-        rasterLayer.bringToFront();
+        if (!site.rasterLayer) {
+          // Pre-extract palette to avoid Vue Proxy wrapping in the rendering hot path.
+          // geotiff-palette hardcodes alpha=255 for all entries so we handle noData (index 255)
+          // explicitly by returning null.
+          const palette = (site.raster as any).palette as Array<[number, number, number, number]>;
+          site.rasterLayer = markRaw(new GeoRasterLayer({
+            georaster: site.raster,
+            opacity: 0.7,
+            resolution: 128,
+            pixelValuesToColorFn: (values: number[]) => {
+              const idx = values[0];
+              if (idx === 255 || !palette) return null; // noData → transparent
+              const [r, g, b] = palette[idx];
+              return `rgba(${r},${g},${b},1)`;
+            },
+          }));
+          site.rasterLayer.addTo(this.map as L.Map);
+        }
+        site.rasterLayer.bringToFront();
       });
     },
-    initMap() {     
-      this.map = L.map("map", {
-        // center: [51.102167, -114.098667],
+    async exportMap() {
+      if (!this.mapContainer || !this.map) return;
+      const corsLayers = ['OSM', 'Carto Light'];
+      if (!corsLayers.includes(this.currentBaseLayer)) {
+        this.exportError = 'Export only works on OSM and Carto Light layers.';
+        return;
+      }
+      this.exportError = '';
+      this.exportLoading = true;
+
+      const savedCenter = this.map.getCenter();
+      const savedZoom   = this.map.getZoom();
+
+      try {
+        const vw = this.mapContainer.clientWidth;
+        const vh = this.mapContainer.clientHeight;
+
+        // Collect tight coverage bounds by scanning non-noData pixels
+        const bounds = L.latLngBounds([]);
+        this.localSites.forEach(site => {
+          const raster = site.raster as any;
+          if (raster?.values?.[0]) {
+            const vals = raster.values[0] as number[][];
+            const H = raster.height as number, W = raster.width as number;
+            let minR = H, maxR = -1, minC = W, maxC = -1;
+            for (let r = 0; r < H; r++) {
+              for (let c = 0; c < W; c++) {
+                if (vals[r][c] !== 255) {
+                  if (r < minR) minR = r;
+                  if (r > maxR) maxR = r;
+                  if (c < minC) minC = c;
+                  if (c > maxC) maxC = c;
+                }
+              }
+            }
+            if (maxR >= 0) {
+              const latMax = (raster.ymax as number) - minR * (raster.pixelHeight as number);
+              const latMin = (raster.ymax as number) - (maxR + 1) * (raster.pixelHeight as number);
+              const lngMin = (raster.xmin as number) + minC * (raster.pixelWidth as number);
+              const lngMax = (raster.xmin as number) + (maxC + 1) * (raster.pixelWidth as number);
+              bounds.extend([[latMin, lngMin], [latMax, lngMax]]);
+            }
+          } else {
+            // Fallback for rasters not yet loaded into memory
+            const b = (site.rasterLayer as any)?.getBounds?.();
+            if (b) bounds.extend(b);
+          }
+        });
+
+        let captures: Array<{ canvas: HTMLCanvasElement; col: number; row: number }> = [];
+        let cols = 1, rows = 1;
+
+        if (bounds.isValid()) {
+          // Auto-select highest zoom where grid ≤ 81 captures (9×9 max)
+          let targetZoom = 18;
+          for (; targetZoom >= 10; targetZoom--) {
+            const sw = this.map.project(bounds.getSouthWest(), targetZoom);
+            const ne = this.map.project(bounds.getNorthEast(), targetZoom);
+            cols = Math.max(1, Math.ceil((ne.x - sw.x) / vw));
+            rows = Math.max(1, Math.ceil((sw.y - ne.y) / vh));
+            if (cols * rows <= 81) break;
+          }
+
+          const sw = this.map.project(bounds.getSouthWest(), targetZoom);
+          const ne = this.map.project(bounds.getNorthEast(), targetZoom);
+
+          for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+              const cellCentre = this.map.unproject(
+                L.point(sw.x + (col + 0.5) * vw, ne.y + (row + 0.5) * vh),
+                targetZoom
+              );
+
+              // 1. Move map to target cell at target zoom
+              this.map.setView(cellCentre, targetZoom, { animate: false });
+
+              // 2. One rAF — lets Leaflet synchronously queue new tile requests
+              await new Promise<void>(r => requestAnimationFrame(r));
+
+              // 3. Register load listeners after tile requests are in-flight
+              await new Promise<void>(resolve => {
+                let done = false;
+                const finish = () => { if (!done) { done = true; resolve(); } };
+                const layers: any[] = [];
+                this.map!.eachLayer((layer: any) => { if (layer._url) layers.push(layer); });
+                if (layers.length === 0) { setTimeout(finish, 1000); return; }
+                layers.forEach(layer => layer.once('load', finish));
+                setTimeout(finish, 5000); // fallback
+              });
+
+              // 4. One more rAF + paint delay — ensures browser decoded & painted tiles
+              await new Promise<void>(r => requestAnimationFrame(r));
+              await new Promise(r => setTimeout(r, 300));
+
+              const canvas = await html2canvas(this.mapContainer!, { scale: 1, useCORS: true, allowTaint: false });
+              captures.push({ canvas, col, row });
+            }
+          }
+        } else {
+          // No overlays — single capture at current view
+          const waitForTiles = () => new Promise<void>(resolve => {
+            const perLayer: Promise<void>[] = [];
+            this.map!.eachLayer((layer: any) => {
+              if (layer._url) {
+                perLayer.push(new Promise<void>(res => layer.once('load', res)));
+              }
+            });
+            if (perLayer.length === 0) { setTimeout(resolve, 1000); return; }
+            Promise.race([Promise.all(perLayer), new Promise<void>(r => setTimeout(r, 4000))]).then(resolve);
+          });
+          await waitForTiles();
+          await new Promise(r => setTimeout(r, 500));
+          const canvas = await html2canvas(this.mapContainer!, { scale: 1, useCORS: true, allowTaint: false });
+          captures.push({ canvas, col: 0, row: 0 });
+        }
+
+        // Stitch all cell captures into one canvas
+        const out = document.createElement('canvas');
+        out.width  = cols * vw;
+        out.height = rows * vh;
+        const ctx = out.getContext('2d')!;
+        for (const { canvas, col, row } of captures) {
+          ctx.drawImage(canvas, col * vw, row * vh);
+        }
+
+        // Embed in PDF and save
+        const { jsPDF } = await import('jspdf');
+        const w = out.width, h = out.height;
+        const pdf = new jsPDF({ orientation: w >= h ? 'l' : 'p', unit: 'px', format: [w, h] });
+        pdf.addImage(out.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, w, h);
+        pdf.save('coverage-map.pdf');
+
+      } catch (err) {
+        this.exportError = 'Export failed. Try switching to OSM or Carto Light.';
+        console.error('Export error:', err);
+      } finally {
+        this.map!.setView(savedCenter, savedZoom, { animate: false });
+        this.exportLoading = false;
+      }
+    },
+    initMap(container: HTMLElement) {
+      this.mapContainer = container;
+      this.map = L.map(container, {
         zoom: 10,
         zoomControl: false,
       });
@@ -109,11 +250,13 @@ const useStore = defineStore('store', {
 
       const cartoLight = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
         attribution: '© OpenStreetMap contributors © CARTO',
+        crossOrigin: 'anonymous',
       });
 
       const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors',
-      })
+        crossOrigin: 'anonymous',
+      });
 
       const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
         attribution: 'Tiles © Esri — Source: Esri, USGS, NOAA',
@@ -126,30 +269,22 @@ const useStore = defineStore('store', {
       streetLayer.addTo(this.map as L.Map);
 
       // Base Layers
-      const baseLayers = {
+      const baseLayers: Record<string, L.TileLayer> = {
         "OSM": streetLayer,
         "Carto Light": cartoLight,
         "Satellite": satelliteLayer,
         "Topo Map": topoLayer
       };
 
-      // EasyPrint control
-      (L as any).easyPrint({
-        title: "Save",
-        position: "bottomleft",
-        sizeModes: ["A4Portrait", "A4Landscape"],
-        filename: "sites",
-        exportOnly: true
-      }).addTo(this.map as L.Map);
-
       L.control.layers(baseLayers, {}, {
         position: "bottomleft",
       }).addTo(this.map as L.Map);
 
-      this.map.on("baselayerchange", () => {
+      this.map.on("baselayerchange", (e: L.LayersControlEvent) => {
+        this.currentBaseLayer = e.name;
         this.redrawSites(); // Re-apply the GeoRasterLayer on top
       });
-      this.currentMarker = L.marker(position, { icon: redPinMarker }).addTo(this.map as L.Map).bindPopup("Transmitter site"); // Variable to hold the current marker
+      this.currentMarker = L.marker(position, { icon: redPinMarker }).addTo(this.map as L.Map).bindPopup("Transmitter site");
       this.redrawSites();
     },
     async runSimulation() {

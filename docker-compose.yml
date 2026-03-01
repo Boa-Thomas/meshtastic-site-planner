@@ -6,7 +6,7 @@ services:
     volumes:
       - ./ui:/app/ui
     environment:
-      - HOME=/root
+      - HOME=/home/appuser
       - TERM=xterm
       - VIRTUAL_HOST=site.meshtastic.org
       - VIRTUAL_PORT=8080

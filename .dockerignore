@@ -1,0 +1,10 @@
+node_modules
+.git
+*.md
+.vscode
+.claude
+.playwright-mcp
+__pycache__
+*.pyc
+.env
+.gitignore

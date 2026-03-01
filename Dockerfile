@@ -23,9 +23,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application files
 COPY . .
 
-# Change to SPLAT directory and set permissions
+# Change to SPLAT directory and fix line endings + set permissions
 WORKDIR /app/splat
-RUN chmod +x build && chmod +x configure && chmod +x install
+RUN sed -i 's/\r//' build configure install && \
+    chmod +x build && chmod +x configure && chmod +x install
 
 # Modify build script and configure SPLAT
 RUN sed -i.bak 's/-march=\$cpu/-march=native/g' build && \
@@ -35,17 +36,28 @@ RUN sed -i.bak 's/-march=\$cpu/-march=native/g' build && \
 
 # SPLAT utils including srtm2sdf
 WORKDIR /app/splat/utils
-RUN chmod +x build
+RUN sed -i 's/\r//' build && chmod +x build
 RUN ./build all && cp srtm2sdf /app && cp srtm2sdf-hd /app
 RUN cp -a ./ /app/splat
 
 WORKDIR /app
-RUN chmod +x /app/splat/splat
-RUN chmod +x /app/splat/srtm2sdf
-RUN chmod +x /app/splat/citydecoder
-RUN chmod +x /app/splat/bearing
-RUN chmod +x /app/splat/fontdata
-RUN chmod +x /app/splat/usgs2sdf
-RUN ls -alh
+
+# Set executable permissions in a single layer
+RUN chmod +x /app/splat/splat \
+    /app/splat/srtm2sdf \
+    /app/splat/citydecoder \
+    /app/splat/bearing \
+    /app/splat/fontdata \
+    /app/splat/usgs2sdf
+
+# Create non-root user and set ownership
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+ENV HOME="/home/appuser"
+
 # Expose the application port
 EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/')"]

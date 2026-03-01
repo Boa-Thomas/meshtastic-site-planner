@@ -16,54 +16,75 @@
           </div>
           <div class="offcanvas-body">
             <ul class="navbar-nav">
-              <li class="nav-item dropdown">
-                <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="true">Site / Transmitter</a>
-                <ul class="dropdown-menu dropdown-menu-dark p-3 show">
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('transmitter')"
+                   :aria-expanded="openPanels.has('transmitter').toString()">Site / Transmitter</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('transmitter') }]"
+                    style="position:static">
                   <li>
                     <Transmitter />
                   </li>
                 </ul>
               </li>
-              <li class="nav-item dropdown">
-                <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">Receiver</a>
-                <ul class="dropdown-menu dropdown-menu-dark p-3">
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('receiver')"
+                   :aria-expanded="openPanels.has('receiver').toString()">Receiver</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('receiver') }]"
+                    style="position:static">
                   <li>
                     <Receiver />
                   </li>
                 </ul>
               </li>
-              <li class="nav-item dropdown">
-                <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">Environment</a>
-                <ul class="dropdown-menu dropdown-menu-dark p-3">
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('environment')"
+                   :aria-expanded="openPanels.has('environment').toString()">Environment</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('environment') }]"
+                    style="position:static">
                   <li>
                     <Environment />
                   </li>
                 </ul>
               </li>
-              <li class="nav-item dropdown">
-                <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">Simulation Options</a>
-                <ul class="dropdown-menu dropdown-menu-dark p-3">
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('simulation')"
+                   :aria-expanded="openPanels.has('simulation').toString()">Simulation Options</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('simulation') }]"
+                    style="position:static">
                   <li>
                     <Simulation />
                   </li>
                 </ul>
               </li>
-              <li class="nav-item dropdown">
-              <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="true">
-                Display
-              </a>
-            <ul class="dropdown-menu dropdown-menu-dark p-3 show">
-            <li>
-              <Display />
-            </li>
-            </ul>
-            </li>
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('display')"
+                   :aria-expanded="openPanels.has('display').toString()">Display</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('display') }]"
+                    style="position:static">
+                  <li>
+                    <Display />
+                  </li>
+                </ul>
+              </li>
             </ul>
             <div class="mt-3 d-flex gap-2">
               <button :disabled="store.simulationState === 'running'" @click="store.runSimulation" type="button" class="btn btn-success btn-sm" id="runSimulation">
                 <span :class="{ 'd-none': store.simulationState !== 'running' }" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
                 <span class="button-text">{{ buttonText() }}</span>
               </button>
+              <button :disabled="store.exportLoading" @click="store.exportMap" type="button" class="btn btn-secondary btn-sm">
+                <span :class="{ 'd-none': !store.exportLoading }" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                Export PDF
+              </button>
+            </div>
+            <div v-if="store.exportError" class="alert alert-warning alert-dismissible mt-2 py-1 px-2 small" role="alert">
+              {{ store.exportError }}
+              <button type="button" class="btn-close btn-sm" @click="store.exportError = ''" aria-label="Close"></button>
             </div>
             <ul class="list-group mt-3">
               <li class="list-group-item d-flex justify-content-between align-items-center" v-for="(site, index) in store.$state.localSites" :key="site.taskId">
@@ -90,6 +111,7 @@ import Environment from "./components/Environment.vue"
 import Simulation from "./components/Simulation.vue"
 import Display from "./components/Display.vue"
 
+import { reactive } from 'vue'
 import { useStore } from './store.ts'
 const store = useStore()
 const buttonText = () => {
@@ -100,6 +122,12 @@ const buttonText = () => {
   } else {
     return 'Run Simulation'
   }
+}
+
+// Which panels are currently expanded (transmitter + display open by default)
+const openPanels = reactive(new Set(['transmitter', 'display']))
+const togglePanel = (name: string) => {
+  openPanels.has(name) ? openPanels.delete(name) : openPanels.add(name)
 }
 </script>
 
