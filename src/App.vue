@@ -78,7 +78,10 @@
                                   style="width: 24px; height: 24px; line-height: 1; font-size: 12px;">
                             {{ site.visible ? 'V' : 'H' }}
                           </button>
-                          <span class="flex-fill text-truncate small">{{ site.params.transmitter.name }}</span>
+                          <span class="flex-fill text-truncate small">
+                            {{ site.params.transmitter.name }}
+                            <span v-if="site.isPreview" class="badge bg-info ms-1">Preview</span>
+                          </span>
                           <button type="button" @click="sitesStore.removeSite(index)" class="btn-close btn-close-white btn-sm" aria-label="Remove"></button>
                         </li>
                       </ul>
@@ -392,11 +395,12 @@ watch(
 )
 
 // Instant redraw when display settings change (colormap, min/max dBm, transparency)
+// 4C.3 — Use updateDisplaySettings() to avoid destroying/recreating layers
 watch(
   () => sitesStore.splatParams.display,
   () => {
     if (sitesStore.localSites.length > 0) {
-      sitesStore.redrawSites(true)
+      sitesStore.updateDisplaySettings()
     }
   },
   { deep: true }
@@ -578,30 +582,16 @@ async function pollForCompletion(taskId: string): Promise<void> {
   }
 }
 
-async function onRunNodeCoverage(nodeId: string): Promise<void> {
-  const node = nodesStore.nodeById(nodeId)
-  if (!node) {
-    console.warn(`[NodeCoverage] Node not found: ${nodeId}`)
-    return
-  }
+function buildPayload(node: MeshNode, radiusM: number, highRes: boolean) {
+  const splatParams = nodeToSplatParams(node, {
+    environment: sitesStore.splatParams.environment,
+    simulation: sitesStore.splatParams.simulation,
+    display: sitesStore.splatParams.display,
+  })
 
-  try {
-    // Cleanup inside try so exceptions don't kill the caller
-    if (node.siteId) {
-      const oldIndex = sitesStore.localSites.findIndex(s => s.taskId === node.siteId)
-      if (oldIndex >= 0) {
-        sitesStore.removeSite(oldIndex)
-      }
-      nodesStore.updateNode(nodeId, { siteId: undefined })
-    }
-
-    const splatParams = nodeToSplatParams(node, {
-      environment: sitesStore.splatParams.environment,
-      simulation: sitesStore.splatParams.simulation,
-      display: sitesStore.splatParams.display,
-    })
-
-    const payload = {
+  return {
+    splatParams,
+    payload: {
       lat: splatParams.transmitter.tx_lat,
       lon: splatParams.transmitter.tx_lon,
       tx_height: splatParams.transmitter.tx_height,
@@ -618,41 +608,102 @@ async function onRunNodeCoverage(nodeId: string): Promise<void> {
       atmosphere_bending: splatParams.environment.atmosphere_bending,
       radio_climate: splatParams.environment.radio_climate,
       polarization: splatParams.environment.polarization,
-      radius: splatParams.simulation.simulation_extent * 1000,
+      radius: radiusM,
       situation_fraction: splatParams.simulation.situation_fraction,
       time_fraction: splatParams.simulation.time_fraction,
-      high_resolution: splatParams.simulation.high_resolution,
+      high_resolution: highRes,
+    },
+  }
+}
+
+async function runSinglePrediction(payload: Record<string, unknown>): Promise<{ taskId: string; arrayBuffer: ArrayBuffer }> {
+  const predictResponse = await fetch('/predict', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!predictResponse.ok) {
+    const detail = await predictResponse.text()
+    throw new Error(`Prediction failed (${predictResponse.status}): ${detail}`)
+  }
+  const { task_id: taskId } = await predictResponse.json()
+  await waitForTaskCompletion(taskId)
+  const resultResponse = await fetch(`/result/${taskId}`)
+  if (!resultResponse.ok) {
+    throw new Error(`Result fetch failed (${resultResponse.status})`)
+  }
+  const arrayBuffer = await resultResponse.arrayBuffer()
+  return { taskId, arrayBuffer }
+}
+
+async function onRunNodeCoverage(nodeId: string, skipPreview = false): Promise<void> {
+  const node = nodesStore.nodeById(nodeId)
+  if (!node) {
+    console.warn(`[NodeCoverage] Node not found: ${nodeId}`)
+    return
+  }
+
+  try {
+    // Cleanup previous coverage
+    if (node.siteId) {
+      const oldIndex = sitesStore.localSites.findIndex(s => s.taskId === node.siteId)
+      if (oldIndex >= 0) {
+        sitesStore.removeSite(oldIndex)
+      }
+      nodesStore.updateNode(nodeId, { siteId: undefined })
     }
 
-    console.log(`[NodeCoverage] POST /predict for "${node.name}"`)
-    const predictResponse = await fetch('/predict', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    if (!predictResponse.ok) {
-      const detail = await predictResponse.text()
-      throw new Error(`Prediction failed (${predictResponse.status}): ${detail}`)
+    const fullRadiusM = sitesStore.splatParams.simulation.simulation_extent * 1000
+    const usePreview = !skipPreview && fullRadiusM > 15000
+
+    const { splatParams, payload: fullPayload } = buildPayload(node, fullRadiusM, sitesStore.splatParams.simulation.high_resolution)
+
+    let previewTaskId: string | undefined
+
+    if (usePreview) {
+      // Launch preview (small radius, low resolution) in parallel with full
+      const previewRadiusM = Math.min(fullRadiusM, 15000)
+      const { payload: previewPayload } = buildPayload(node, previewRadiusM, false)
+
+      console.log(`[NodeCoverage] Starting preview + full for "${node.name}"`)
+
+      // Preview runs fire-and-forget alongside the full run
+      const previewPromise = runSinglePrediction(previewPayload).then(async ({ taskId, arrayBuffer }) => {
+        previewTaskId = taskId
+        await sitesStore.addSiteFromBuffer(taskId, arrayBuffer, splatParams, true)
+        console.log(`[NodeCoverage] Preview ready for "${node.name}"`)
+      }).catch(err => {
+        console.warn(`[NodeCoverage] Preview failed (non-blocking):`, err)
+      })
+
+      // Full run
+      const fullResult = await runSinglePrediction(fullPayload)
+
+      // Remove preview layer before adding full
+      if (previewTaskId) {
+        const previewIndex = sitesStore.localSites.findIndex(s => s.taskId === previewTaskId)
+        if (previewIndex >= 0) {
+          sitesStore.removeSite(previewIndex)
+        }
+      }
+
+      await sitesStore.addSiteFromBuffer(fullResult.taskId, fullResult.arrayBuffer, splatParams)
+      nodesStore.updateNode(nodeId, { siteId: fullResult.taskId })
+      console.log(`[NodeCoverage] Full coverage completed for "${node.name}"`)
+
+      // Ensure preview promise settles (don't leave unhandled)
+      await previewPromise
+    } else {
+      // No preview — direct full run
+      console.log(`[NodeCoverage] POST /predict for "${node.name}" (no preview, radius=${fullRadiusM}m)`)
+      const { taskId, arrayBuffer } = await runSinglePrediction(fullPayload)
+      await sitesStore.addSiteFromBuffer(taskId, arrayBuffer, splatParams)
+      nodesStore.updateNode(nodeId, { siteId: taskId })
+      console.log(`[NodeCoverage] Completed for "${node.name}"`)
     }
-
-    const { task_id: taskId } = await predictResponse.json()
-    console.log(`[NodeCoverage] Task ${taskId} started for "${node.name}"`)
-
-    // Wait for completion via SSE (with polling fallback)
-    await waitForTaskCompletion(taskId)
-
-    const resultResponse = await fetch(`/result/${taskId}`)
-    if (!resultResponse.ok) {
-      throw new Error(`Result fetch failed (${resultResponse.status})`)
-    }
-
-    const arrayBuffer = await resultResponse.arrayBuffer()
-    await sitesStore.addSiteFromBuffer(taskId, arrayBuffer, splatParams)
-    nodesStore.updateNode(nodeId, { siteId: taskId })
-    console.log(`[NodeCoverage] Completed for "${node.name}"`)
   } catch (err) {
     console.error(`[NodeCoverage] Error for node ${nodeId}:`, err)
-    throw err // Re-throw so onRunAllCoverage can catch it
+    throw err
   }
 }
 
@@ -680,7 +731,7 @@ async function onRunAllCoverage() {
       const batch = nodeIds.slice(i, i + BATCH_SIZE)
       const results = await Promise.allSettled(
         batch.map(async (nodeId) => {
-          await onRunNodeCoverage(nodeId)
+          await onRunNodeCoverage(nodeId, true)
           runAllProgress.value.current++
         })
       )

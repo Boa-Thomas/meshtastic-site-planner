@@ -6,6 +6,7 @@ export interface Site {
   rasterLayer?: any
   visible: boolean
   rasterData?: ArrayBuffer
+  isPreview?: boolean
 }
 
 export interface SplatParams {

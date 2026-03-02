@@ -108,6 +108,16 @@ class CoveragePredictionRequest(BaseModel):
         description="Use optional 1-arcsecond / 30 meter resolution  terrain tiles instead of the default 3-arcsecond / 90 meter (default: False).",
     )
 
+    engine: Optional[str] = Field(
+        None,
+        description="Propagation engine to use ('splat' or 'signal_server'). Defaults to server config.",
+    )
+
+    propagation_model: Optional[str] = Field(
+        None,
+        description="Propagation model for Signal Server (e.g., 'itm', 'hata', 'cost231', 'itwom'). Ignored for SPLAT!.",
+    )
+
     def rf_param_hash(self) -> str:
         """SHA-256 hash of RF-significant parameters (excludes display-only params like colormap)."""
         significant = {
@@ -131,5 +141,7 @@ class CoveragePredictionRequest(BaseModel):
             "situation_fraction": round(self.situation_fraction, 1),
             "time_fraction": round(self.time_fraction, 1),
             "high_resolution": self.high_resolution,
+            "engine": self.engine,
+            "propagation_model": self.propagation_model,
         }
         return hashlib.sha256(json.dumps(significant, sort_keys=True).encode()).hexdigest()[:16]

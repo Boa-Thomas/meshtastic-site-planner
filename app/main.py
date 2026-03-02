@@ -23,7 +23,7 @@ from starlette.requests import Request
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from app.services.splat import Splat
+from app.services.engine_factory import get_engine
 from app.models.CoveragePredictionRequest import CoveragePredictionRequest
 import logging
 import io
@@ -31,11 +31,11 @@ import io
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Celery feature flag — when True, tasks are dispatched to Celery workers
+USE_CELERY = os.environ.get("USE_CELERY", "false").lower() == "true"
+
 # Initialize Redis client for binary data
 redis_client = redis.StrictRedis(host="redis", port=6379, decode_responses=False)
-
-# Initialize SPLAT service
-splat_service = Splat(splat_path="/app/splat")
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -76,8 +76,9 @@ def run_splat(task_id: str, request: CoveragePredictionRequest):
         Exception: If SPLAT! fails during execution.
     """
     try:
-        logger.info(f"Starting SPLAT! coverage prediction for task {task_id}.")
-        geotiff_data = splat_service.coverage_prediction(request)
+        logger.info(f"Starting coverage prediction for task {task_id}.")
+        engine = get_engine(request.engine)
+        geotiff_data = engine.coverage_prediction(request)
 
         # Log before storing in Redis
         logger.info(f"Storing result in Redis for task {task_id}")
@@ -120,7 +121,11 @@ async def predict(request: Request, payload: CoveragePredictionRequest, backgrou
     task_id = str(uuid4())
     redis_client.setex(f"{task_id}:status", 3600, "processing")
     redis_client.setex(f"rfcache:{rf_hash}", 3600, task_id)
-    background_tasks.add_task(run_splat, task_id, payload)
+    if USE_CELERY:
+        from app.tasks import run_splat_task
+        run_splat_task.delay(task_id, payload.model_dump())
+    else:
+        background_tasks.add_task(run_splat, task_id, payload)
     return JSONResponse({"task_id": task_id})
 
 @app.get("/status/{task_id}")

@@ -24,6 +24,8 @@ from rasterio.transform import from_bounds
 from PIL import Image
 
 from app.models.CoveragePredictionRequest import CoveragePredictionRequest
+from app.services.engine import PropagationEngine
+from app.services.geotiff_utils import ppm_kml_to_geotiff
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +35,7 @@ logging.getLogger("s3transfer").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
-class Splat:
+class Splat(PropagationEngine):
     def __init__(
         self,
         splat_path: str,
@@ -119,6 +121,16 @@ class Splat:
 
         logger.info(
             f"Initialized SPLAT! with terrain tile cache at '{cache_dir}' with a size limit of {cache_size_gb} GB."
+        )
+
+    @property
+    def name(self) -> str:
+        return "splat"
+
+    def is_available(self) -> bool:
+        return (
+            os.path.isfile(self.splat_binary) and os.access(self.splat_binary, os.X_OK) and
+            os.path.isfile(self.splat_hd_binary) and os.access(self.splat_hd_binary, os.X_OK)
         )
 
     def coverage_prediction(self, request: CoveragePredictionRequest) -> bytes:
@@ -242,7 +254,7 @@ class Splat:
                     with open(os.path.join(tmpdir, "output.kml"), "rb") as kml_file:
                         ppm_data = ppm_file.read()
                         kml_data = kml_file.read()
-                        geotiff_data = Splat._create_splat_geotiff(ppm_data, kml_data)
+                        geotiff_data = ppm_kml_to_geotiff(ppm_data, kml_data)
 
                 logger.info("SPLAT! coverage prediction completed successfully.")
                 return geotiff_data

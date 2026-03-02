@@ -5,12 +5,14 @@ services:
       dockerfile: Dockerfile
     volumes:
       - ./ui:/app/ui
+      - splat-tile-cache:/app/.splat_tiles
     environment:
       - HOME=/home/appuser
       - TERM=xterm
       - VIRTUAL_HOST=site.meshtastic.org
       - VIRTUAL_PORT=8080
       - LETSENCRYPT_HOST=site.meshtastic.org
+      - USE_CELERY=true
     mem_limit: 12G
     ports:
       - 8080:8080
@@ -65,6 +67,39 @@ services:
     networks:
       - app-network
 
+  worker:
+    build: .
+    volumes:
+      - splat-tile-cache:/app/.splat_tiles
+    environment:
+      - HOME=/home/appuser
+      - TERM=xterm
+      - REDIS_HOST=redis
+      - SPLAT_TILE_CACHE=/app/.splat_tiles
+    mem_limit: 6G
+    depends_on:
+      - redis
+    working_dir: "/app"
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--concurrency=1"]
+    restart: unless-stopped
+    networks:
+      - app-network
+
+  flower:
+    build: .
+    environment:
+      - HOME=/home/appuser
+      - TERM=xterm
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    working_dir: "/app"
+    command: ["celery", "-A", "app.tasks", "flower", "--port=5555"]
+    restart: unless-stopped
+    networks:
+      - app-network
+
 networks:
   app-network:
 
@@ -74,3 +109,4 @@ volumes:
   html:
   certs:
   acme:
+  splat-tile-cache:

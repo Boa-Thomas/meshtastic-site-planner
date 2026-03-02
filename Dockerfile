@@ -42,6 +42,18 @@ RUN sed -i 's/-O2/-O3/g' build && \
     ./build all && cp srtm2sdf /app && cp srtm2sdf-hd /app
 RUN cp -a ./ /app/splat
 
+# Build Signal Server (optional — non-fatal if build fails)
+WORKDIR /app
+RUN apt-get update && apt-get install -y cmake git && apt-get clean || true
+RUN git clone --depth 1 https://github.com/Cloud-RF/Signal-Server.git /tmp/signal-server && \
+    cd /tmp/signal-server && \
+    mkdir build && cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc) && \
+    cp src/signalserver /usr/local/bin/signalserverHD && \
+    cp src/signalserver /usr/local/bin/signalserver && \
+    cd /app && rm -rf /tmp/signal-server || echo "Signal Server build skipped (optional)"
+
 WORKDIR /app
 
 # Set executable permissions in a single layer

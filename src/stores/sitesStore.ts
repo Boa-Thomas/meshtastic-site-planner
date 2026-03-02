@@ -96,7 +96,7 @@ export const useSitesStore = defineStore('sites', {
     // Centralized site creation from an ArrayBuffer
     // -----------------------------------------------------------------------
 
-    async addSiteFromBuffer(taskId: string, arrayBuffer: ArrayBuffer, params: SplatParams) {
+    async addSiteFromBuffer(taskId: string, arrayBuffer: ArrayBuffer, params: SplatParams, isPreview = false) {
       // Keep an independent copy — parseGeoraster may detach the original buffer
       const rasterCopy = arrayBuffer.slice(0)
       const geoRaster = await parseGeoraster(rasterCopy)
@@ -106,11 +106,14 @@ export const useSitesStore = defineStore('sites', {
         raster: markRaw(geoRaster),
         visible: true,
         rasterData: arrayBuffer,
+        isPreview,
       })
       this.redrawSites()
-      saveSiteToDb(taskId, cloneObject(params), arrayBuffer).catch((err) =>
-        console.warn('[IndexedDB] Failed to save site:', err),
-      )
+      if (!isPreview) {
+        saveSiteToDb(taskId, cloneObject(params), arrayBuffer).catch((err) =>
+          console.warn('[IndexedDB] Failed to save site:', err),
+        )
+      }
     },
 
     // -----------------------------------------------------------------------
@@ -194,7 +197,17 @@ export const useSitesStore = defineStore('sites', {
       if (!mapStore.map) return
       const colormap = this.splatParams.display.color_scale
       const opacity = this.splatParams.display.overlay_transparency / 100
+
+      // 4C.2 — Pre-compute 256-entry color cache once per colormap invocation
+      const colorCache: (string | null)[] = new Array(256)
+      for (let i = 0; i < 255; i++) {
+        const [r, g, b] = colormapLookup(colormap, i / 254)
+        colorCache[i] = `rgba(${r},${g},${b},1)`
+      }
+      colorCache[255] = null // noData → transparent
+
       this.localSites.forEach((site: Site) => {
+        const siteOpacity = site.isPreview ? opacity * 0.6 : opacity
         if (!site.rasterLayer || forceRecreate) {
           // Remove old layer if force-recreating
           if (site.rasterLayer && mapStore.map) {
@@ -203,15 +216,12 @@ export const useSitesStore = defineStore('sites', {
           // Client-side colormap: pixel values are grayscale (0-254 = signal, 255 = noData)
           site.rasterLayer = markRaw(new GeoRasterLayer({
             georaster: site.raster,
-            opacity,
-            resolution: 256,
-            pixelValuesToColorFn: (values: number[]) => {
-              const idx = values[0]
-              if (idx === 255) return null // noData → transparent
-              const t = idx / 254 // normalize to [0, 1]
-              const [r, g, b] = colormapLookup(colormap, t)
-              return `rgba(${r},${g},${b},1)`
-            },
+            opacity: siteOpacity,
+            // 4C.1 — Adaptive resolution by zoom level (object form is valid per GeoRasterLayer docs)
+            resolution: { 0: 16, 5: 32, 8: 64, 12: 128, 15: 256 } as unknown as number,
+            // 4C.4 — Prevent rendering at very low zoom levels
+            minZoom: 3,
+            pixelValuesToColorFn: (values: number[]) => colorCache[values[0]],
           }))
           if (site.visible !== false) {
             site.rasterLayer.addTo(mapStore.map as L.Map)
@@ -221,6 +231,36 @@ export const useSitesStore = defineStore('sites', {
           site.rasterLayer.bringToFront()
         }
       })
+    },
+
+    // -----------------------------------------------------------------------
+    // 4C.3 — Update display settings in-place via updateColors() + setOpacity()
+    // -----------------------------------------------------------------------
+
+    updateDisplaySettings() {
+      const mapStore = useMapStore()
+      if (!mapStore.map) return
+      const colormap = this.splatParams.display.color_scale
+      const opacity = this.splatParams.display.overlay_transparency / 100
+
+      // Pre-compute color cache (same approach as redrawSites)
+      const colorCache: (string | null)[] = new Array(256)
+      for (let i = 0; i < 255; i++) {
+        const [r, g, b] = colormapLookup(colormap, i / 254)
+        colorCache[i] = `rgba(${r},${g},${b},1)`
+      }
+      colorCache[255] = null
+
+      const newColorFn = (values: number[]) => colorCache[values[0]]
+
+      for (const site of this.localSites) {
+        if (!site.rasterLayer) continue
+        // updateColors re-renders only visible tiles without re-parsing the raster
+        if (typeof (site.rasterLayer as any).updateColors === 'function') {
+          ;(site.rasterLayer as any).updateColors(newColorFn)
+        }
+        site.rasterLayer.setOpacity(opacity)
+      }
     },
 
     // -----------------------------------------------------------------------
