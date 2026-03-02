@@ -9,6 +9,10 @@ export default defineConfig({
       '/predict': 'http://localhost:8080/',
       '/status': 'http://localhost:8080/',
       '/result': 'http://localhost:8080/',
+      '/events': {
+        target: 'http://localhost:8080/',
+        headers: { 'X-Accel-Buffering': 'no' },
+      },
     },
   },
   build: {

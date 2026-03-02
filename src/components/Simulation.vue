@@ -15,8 +15,8 @@
         <div class="row g-2 mt-2">
             <div class="col-6">
                 <label for="simulation_extent" class="form-label">Max Range (km)</label>
-                <input v-model="simulation.simulation_extent" type="number" class="form-control form-control-sm" id="simulation_extent" required min="1" max="100" step="1" />
-                <div class="invalid-feedback">Radius must be a positive number (default: 30 km).</div>
+                <input v-model="simulation.simulation_extent" type="number" class="form-control form-control-sm" id="simulation_extent" required min="1" max="400" step="1" />
+                <div class="invalid-feedback">Radius must be between 1 and 400 km.</div>
             </div>
         </div>
         <div class="row mt-3">

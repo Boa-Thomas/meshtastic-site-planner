@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from typing import Literal, List, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from rasterio.transform import Affine
 
 import boto3
@@ -23,6 +24,8 @@ from rasterio.transform import from_bounds
 from PIL import Image
 
 from app.models.CoveragePredictionRequest import CoveragePredictionRequest
+from app.services.engine import PropagationEngine
+from app.services.geotiff_utils import ppm_kml_to_geotiff
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +35,7 @@ logging.getLogger("s3transfer").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
-class Splat:
+class Splat(PropagationEngine):
     def __init__(
         self,
         splat_path: str,
@@ -120,6 +123,16 @@ class Splat:
             f"Initialized SPLAT! with terrain tile cache at '{cache_dir}' with a size limit of {cache_size_gb} GB."
         )
 
+    @property
+    def name(self) -> str:
+        return "splat"
+
+    def is_available(self) -> bool:
+        return (
+            os.path.isfile(self.splat_binary) and os.access(self.splat_binary, os.X_OK) and
+            os.path.isfile(self.splat_hd_binary) and os.access(self.splat_hd_binary, os.X_OK)
+        )
+
     def coverage_prediction(self, request: CoveragePredictionRequest) -> bytes:
         """
         Execute a SPLAT! coverage prediction using the provided CoveragePredictionRequest.
@@ -142,21 +155,27 @@ class Splat:
                 # FIXME: Eventually support high-resolution terrain data
                 request.high_resolution = False
 
-                # Set hard limit of 100 km radius
-                if request.radius > 100000:
-                    logger.debug(f"User tried to set radius of {request.radius} meters, setting to 100 km.")
-                    request.radius = 100000
+                # Set hard limit of 400 km radius (MAXPAGES=64 supports ~445km at equator)
+                if request.radius > 400_000:
+                    logger.warning(f"User tried to set radius of {request.radius} meters, clamping to 400 km.")
+                    request.radius = 400_000
 
                 # determine the required terrain tiles
                 required_tiles = Splat._calculate_required_terrain_tiles(request.lat, request.lon, request.radius)
 
-                # download and convert terrain tiles to SPLAT! sdf
-                for tile_name, sdf_name, sdf_hd_name in required_tiles:
-                    tile_data = self._download_terrain_tile(tile_name)
-                    sdf_data = self._convert_hgt_to_sdf(tile_data, tile_name, high_resolution=request.high_resolution)
-
-                    with open(os.path.join(tmpdir, sdf_hd_name if request.high_resolution else sdf_name), "wb") as sdf_file:
-                        sdf_file.write(sdf_data)
+                # download and convert terrain tiles to SPLAT! sdf (parallel)
+                max_workers = min(len(required_tiles), 8)
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {
+                        executor.submit(
+                            self._download_and_convert_tile,
+                            tile_name, sdf_name, sdf_hd_name,
+                            request.high_resolution, tmpdir
+                        ): tile_name
+                        for tile_name, sdf_name, sdf_hd_name in required_tiles
+                    }
+                    for future in as_completed(futures):
+                        future.result()  # Propagate exceptions
 
                 # write transmitter / qth file
                 with open(os.path.join(tmpdir, "tx.qth"), "wb") as qth_file:
@@ -177,13 +196,9 @@ class Splat:
                         tx_gain=request.tx_gain,
                         system_loss=request.system_loss))
 
-                # write colorbar / dcf file
+                # write colorbar / dcf file (grayscale — colormap applied client-side)
                 with open(os.path.join(tmpdir, "splat.dcf"), "wb") as dcf_file:
-                    dcf_file.write(Splat._create_splat_dcf(
-                        colormap_name=request.colormap,
-                        min_dbm=request.min_dbm,
-                        max_dbm=request.max_dbm
-                    ))
+                    dcf_file.write(Splat._create_splat_dcf())
 
                 logger.debug(f"Contents of {tmpdir}: {os.listdir(tmpdir)}")
 
@@ -239,7 +254,7 @@ class Splat:
                     with open(os.path.join(tmpdir, "output.kml"), "rb") as kml_file:
                         ppm_data = ppm_file.read()
                         kml_data = kml_file.read()
-                        geotiff_data = Splat._create_splat_geotiff(ppm_data,kml_data,request.colormap,request.min_dbm,request.max_dbm)
+                        geotiff_data = ppm_kml_to_geotiff(ppm_data, kml_data)
 
                 logger.info("SPLAT! coverage prediction completed successfully.")
                 return geotiff_data
@@ -247,6 +262,15 @@ class Splat:
             except Exception as e:
                 logger.error(f"Error during coverage prediction: {e}")
                 raise RuntimeError(f"Error during coverage prediction: {e}")
+
+    def _download_and_convert_tile(self, tile_name: str, sdf_name: str, sdf_hd_name: str,
+                                    high_resolution: bool, tmpdir: str) -> None:
+        """Download a terrain tile, convert to SDF, and write to tmpdir."""
+        tile_data = self._download_terrain_tile(tile_name)
+        sdf_data = self._convert_hgt_to_sdf(tile_data, tile_name, high_resolution=high_resolution)
+        target = sdf_hd_name if high_resolution else sdf_name
+        with open(os.path.join(tmpdir, target), "wb") as f:
+            f.write(sdf_data)
 
     @staticmethod
     def _calculate_required_terrain_tiles(
@@ -439,39 +463,29 @@ class Splat:
             raise
 
     @staticmethod
-    def _create_splat_dcf(
-            colormap_name: str, min_dbm: float, max_dbm: float
-    ) -> bytes:
+    def _create_splat_dcf() -> bytes:
         """
-        Generate the content of a SPLAT! .dcf file controlling the signal level contours
-        using the specified Matplotlib color map.
+        Generate a SPLAT! .dcf file with a linear grayscale ramp.
 
-        Args:
-            colormap_name (str): The name of the Matplotlib colormap.
-            min_dbm (float): The minimum signal strength value for the colormap in dBm.
-            max_dbm (float): The maximum signal strength value for the colormap in dBm.
+        Uses a fixed dBm range (-130 to -30) with 32 grayscale levels so that
+        pixel values after convert("L") are proportional to dBm. Colormap is
+        applied client-side.
 
         Returns:
             bytes: The content of the .dcf file formatted for SPLAT!.
         """
-        logger.debug(
-            f"Generating .dcf file content using colormap '{colormap_name}', min_dbm={min_dbm}, max_dbm={max_dbm}."
-        )
+        min_dbm, max_dbm = -130, -30
+        logger.debug("Generating grayscale .dcf file content.")
 
         try:
-            # Generate color map values and normalization
-            cmap = plt.get_cmap(colormap_name)
             cmap_values = np.linspace(max_dbm, min_dbm, 32)  # SPLAT! supports up to 32 levels
-            cmap_norm = plt.Normalize(vmin=min_dbm, vmax=max_dbm)
+            # Linear grayscale ramp: strongest signal → brightest (247), weakest → darkest (0)
+            gray_levels = np.linspace(247, 0, 32).astype(int)
 
-            # Generate RGB values
-            rgb_colors = (cmap(cmap_norm(cmap_values))[:, :3] * 255).astype(int)
-
-            # Prepare .dcf content
-            contents = "; SPLAT! Auto-generated DBM Signal Level Color Definition\n;\n"
+            contents = "; SPLAT! Grayscale DCF (colormap applied client-side)\n;\n"
             contents += "; Format: dBm: red, green, blue\n;\n"
-            for value, rgb in zip(cmap_values, rgb_colors):
-                contents += f"{int(value):+4d}: {rgb[0]:3d}, {rgb[1]:3d}, {rgb[2]:3d}\n"
+            for value, gray in zip(cmap_values, gray_levels):
+                contents += f"{int(value):+4d}: {gray:3d}, {gray:3d}, {gray:3d}\n"
 
             logger.debug(f"Generated .dcf file contents:\n{contents}")
             return contents.encode("utf-8")
@@ -500,20 +514,17 @@ class Splat:
     def _create_splat_geotiff(
             ppm_bytes: bytes,
             kml_bytes: bytes,
-            colormap_name: str,
-            min_dbm: float,
-            max_dbm: float,
             null_value: int = 255  # Define the null value for transparency
     ) -> bytes:
         """
-        Generate GeoTIFF file content from SPLAT! PPM and KML data, with transparency for null areas.
+        Generate a grayscale GeoTIFF from SPLAT! PPM and KML data.
+
+        Pixel values 0-254 represent signal strength (proportional to dBm).
+        Value 255 is noData (transparent). Colormap is applied client-side.
 
         Args:
             ppm_bytes (bytes): Binary content of the SPLAT-generated PPM file.
             kml_bytes (bytes): Binary content of the KML file containing geospatial bounds.
-            colormap_name (str): Name of the matplotlib colormap to use for the GeoTIFF.
-            min_dbm (float): Minimum dBm value for the colormap scale.
-            max_dbm (float): Maximum dBm value for the colormap scale.
             null_value (int): Pixel value in the PPM that represents null areas. Defaults to 255.
 
         Returns:
@@ -522,7 +533,7 @@ class Splat:
         Raises:
             RuntimeError: If the conversion process fails.
         """
-        logger.info("Starting GeoTIFF generation from SPLAT! PPM and KML data.")
+        logger.info("Starting grayscale GeoTIFF generation from SPLAT! PPM and KML data.")
 
         try:
             # Parse KML and extract bounding box
@@ -551,7 +562,7 @@ class Splat:
             logger.debug(f"PPM image dimensions: {img_array.shape}")
 
             # Mask null values
-            img_array = np.where(img_array == null_value, 255, img_array)  # Optionally set to 0
+            img_array = np.where(img_array == null_value, 255, img_array)
             no_data_value = null_value
 
             # Create GeoTIFF using Rasterio
@@ -559,19 +570,7 @@ class Splat:
             transform = from_bounds(west, south, east, north, width, height)
             logger.debug(f"GeoTIFF transform matrix: {transform}")
 
-            # Generate colormap with transparency
-            cmap = plt.get_cmap(colormap_name, 256)  # colormap with 256 levels
-            cmap_norm = plt.Normalize(vmin=min_dbm, vmax=max_dbm)  # Normalize based on dBm range
-            cmap_values = np.linspace(min_dbm, max_dbm, 255)
-
-            # Map data values to RGB for visible colors
-            rgb_colors = (cmap(cmap_norm(cmap_values))[:, :3] * 255).astype(int)
-
-            # Initialize GDAL-compatible colormap with transparency for null values
-            gdal_colormap = {i: tuple(rgb) + (255,) for i, rgb in enumerate(rgb_colors)}
-            gdal_colormap[null_value] = (0, 0, 0, 0)  # noData → fully transparent
-
-            # Write GeoTIFF to memory
+            # Write grayscale GeoTIFF to memory (no palette — colormap applied client-side)
             with io.BytesIO() as buffer:
                 with rasterio.open(
                         buffer,
@@ -583,17 +582,16 @@ class Splat:
                         dtype="uint8",
                         crs="EPSG:4326",
                         transform=transform,
-                        photometric="palette",  # Colormap interpretation
+                        photometric="minisblack",
                         compress="lzw",
-                        nodata=no_data_value,  # Set NoData value
+                        nodata=no_data_value,
                 ) as dst:
-                    dst.write(img_array, 1)  # Write the raster data
-                    dst.write_colormap(1, gdal_colormap)  # Attach the colormap
+                    dst.write(img_array, 1)
 
                 buffer.seek(0)
                 geotiff_bytes = buffer.read()
 
-            logger.info("GeoTIFF generation successful.")
+            logger.info("Grayscale GeoTIFF generation successful.")
             return geotiff_bytes
 
         except Exception as e:

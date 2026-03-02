@@ -22,10 +22,10 @@
         </span>
         <button
           type="button"
-          @click.stop="nodesStore.removeNode(node.id)"
+          @click.stop="nodesStore.selectedNodeId = null"
           class="btn-close btn-close-white"
           style="font-size: 0.6rem"
-          aria-label="Remove node"
+          aria-label="Deselect node"
         ></button>
       </li>
     </ul>

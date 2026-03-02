@@ -1,14 +1,12 @@
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import L from 'leaflet'
-import { redPinMarker } from '../layers'
 
 export const useMapStore = defineStore('map', {
   state: () => ({
     map: undefined as undefined | L.Map,
     mapContainer: undefined as undefined | HTMLElement,
     currentBaseLayer: 'OSM' as string,
-    currentMarker: undefined as undefined | L.Marker,
   }),
   actions: {
     initMap(container: HTMLElement, position: [number, number]) {
@@ -61,15 +59,9 @@ export const useMapStore = defineStore('map', {
         })
       })
 
-      this.currentMarker = markRaw(
-        L.marker(position, { icon: redPinMarker })
-          .addTo(this.map as L.Map)
-          .bindPopup('Transmitter site')
-      )
-
-      // Lazily call redrawSites to render any existing coverage layers
+      // Restore persisted coverage layers from IndexedDB (also calls redrawSites)
       import('./sitesStore').then(({ useSitesStore }) => {
-        useSitesStore().redrawSites()
+        useSitesStore().restoreFromIndexedDB()
       })
     },
   },

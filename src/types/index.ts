@@ -4,6 +4,9 @@ export interface Site {
   taskId: string
   raster: any
   rasterLayer?: any
+  visible: boolean
+  rasterData?: ArrayBuffer
+  isPreview?: boolean
 }
 
 export interface SplatParams {
@@ -168,19 +171,18 @@ export interface MeshNode {
   /** Operating frequency in MHz */
   frequencyMhz: number
 
-  /** Transmitter antenna height above ground level (AGL) in metres */
-  txHeight: number
-
   /** Transmitter antenna gain in dBi */
   txGainDbi: number
+
+  // -- Antenna height -------------------------------------------------------
+
+  /** Antenna height above ground level (AGL) in metres */
+  antennaHeight: number
 
   // -- RX parameters --------------------------------------------------------
 
   /** Receiver sensitivity in dBm (at the active channel preset) */
   rxSensitivityDbm: number
-
-  /** Receiver antenna height AGL in metres */
-  rxHeight: number
 
   /** Receiver antenna gain in dBi */
   rxGainDbi: number
@@ -206,6 +208,19 @@ export interface MeshNode {
     /** Half-power beamwidth in degrees */
     beamwidth: number
   }
+
+  /**
+   * Angular cone visible from a window installation.
+   * startDeg and endDeg are in degrees (0=North, clockwise).
+   * Only meaningful when `installationType === 'window'`.
+   */
+  windowCone?: {
+    startDeg: number
+    endDeg: number
+  }
+
+  /** Terrain elevation above mean sea level in metres (from Open-Meteo API) */
+  elevationM?: number
 
   /** Estimated obstruction level at the site */
   obstructionLevel: ObstructionLevel

@@ -73,7 +73,7 @@ def client(
     """
     with (
         patch("app.main.redis_client", mock_redis),
-        patch("app.main.splat_service", mock_splat),
+        patch("app.main.get_engine", return_value=mock_splat),
     ):
         from app.main import app  # noqa: PLC0415
 

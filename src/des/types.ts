@@ -31,6 +31,8 @@ export interface Packet {
   retryCount: number
   txStartTime?: number
   txEndTime?: number
+  /** Ordered list of node IDs this packet has traversed (origin, relay1, relay2, …) */
+  routePath: string[]
 }
 
 export interface LinkInfo {
@@ -52,6 +54,7 @@ export interface SimulationConfig {
   maxRetransmissions: number // max retries for direct messages (default: 3)
   noiseFloorDbm: number     // ambient noise floor (default: -120)
   region: RegionId
+  pathLossConfig?: PathLossConfig  // dual-slope model; omit for pure FSPL (n=2.0)
 }
 
 export interface SimulationState {
@@ -71,6 +74,32 @@ export interface SimulationMetrics {
   airtimeByNode: Map<string, number>
   dutyCycleByNode: Map<string, number>
 }
+
+/** Map of "fromId->toId" → RSSI in dBm, built from SPLAT! raster data */
+export type RssiOverrideMap = Map<string, number>
+
+/** Configuration for dual-slope path loss model. */
+export interface PathLossConfig {
+  /** Path loss exponent beyond breakpoint (2.0=free space, 3.0=forest, 3.5=dense urban) */
+  pathLossExponent: number
+  /** Distance in km below which pure FSPL is used */
+  breakpointKm: number
+}
+
+export type PathLossProfileId = 'free_space' | 'suburban_rural' | 'forest_mountain' | 'dense_urban'
+
+export interface PathLossProfile {
+  id: PathLossProfileId
+  name: string
+  config: PathLossConfig
+}
+
+export const PATH_LOSS_PROFILES: PathLossProfile[] = [
+  { id: 'free_space', name: 'Free Space (LOS)', config: { pathLossExponent: 2.0, breakpointKm: 1.0 } },
+  { id: 'suburban_rural', name: 'Suburban / Rural', config: { pathLossExponent: 2.8, breakpointKm: 1.0 } },
+  { id: 'forest_mountain', name: 'Forest / Mountain', config: { pathLossExponent: 3.0, breakpointKm: 1.0 } },
+  { id: 'dense_urban', name: 'Dense Urban', config: { pathLossExponent: 3.5, breakpointKm: 0.5 } },
+]
 
 // Region defaults
 export const REGION_DEFAULTS: Record<RegionId, { frequencyMhz: number; dutyCyclePercent: number }> = {
