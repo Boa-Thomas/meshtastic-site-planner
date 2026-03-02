@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
+import hashlib
+import json
 import matplotlib.pyplot as plt
 
 AVAILABLE_COLORMAPS = plt.colormaps()
@@ -105,3 +107,29 @@ class CoveragePredictionRequest(BaseModel):
         False,
         description="Use optional 1-arcsecond / 30 meter resolution  terrain tiles instead of the default 3-arcsecond / 90 meter (default: False).",
     )
+
+    def rf_param_hash(self) -> str:
+        """SHA-256 hash of RF-significant parameters (excludes display-only params like colormap)."""
+        significant = {
+            "lat": round(self.lat, 6),
+            "lon": round(self.lon, 6),
+            "tx_height": round(self.tx_height, 2),
+            "tx_power": round(self.tx_power, 2),
+            "tx_gain": round(self.tx_gain, 2),
+            "frequency_mhz": round(self.frequency_mhz, 3),
+            "rx_height": round(self.rx_height, 2),
+            "rx_gain": round(self.rx_gain, 2),
+            "signal_threshold": round(self.signal_threshold, 1),
+            "clutter_height": round(self.clutter_height, 2),
+            "ground_dielectric": round(self.ground_dielectric, 3),
+            "ground_conductivity": round(self.ground_conductivity, 6),
+            "atmosphere_bending": round(self.atmosphere_bending, 3),
+            "radius": round(self.radius, 0),
+            "system_loss": round(self.system_loss, 2),
+            "radio_climate": self.radio_climate,
+            "polarization": self.polarization,
+            "situation_fraction": round(self.situation_fraction, 1),
+            "time_fraction": round(self.time_fraction, 1),
+            "high_resolution": self.high_resolution,
+        }
+        return hashlib.sha256(json.dumps(significant, sort_keys=True).encode()).hexdigest()[:16]

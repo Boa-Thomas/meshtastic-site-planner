@@ -1,37 +1,78 @@
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
-import { randanimalSync } from 'randanimal'
 import GeoRasterLayer from 'georaster-layer-for-leaflet'
 import parseGeoraster from 'georaster'
 import L from 'leaflet'
 import { type Site, type SplatParams } from '../types'
 import { cloneObject } from '../utils'
 import { useMapStore } from './mapStore'
+import { colormapLookup } from '../utils/colormaps'
+import type { SharedSettings } from '../utils/nodeToSplatParams'
+
+// ---------------------------------------------------------------------------
+// IndexedDB helpers (module-level, no Vue dependency)
+// ---------------------------------------------------------------------------
+
+const DB_NAME = 'meshtastic-planner'
+const STORE_NAME = 'splat-coverage'
+const DB_VERSION = 1
+
+function openCoverageDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION)
+    request.onupgradeneeded = () => {
+      const db = request.result
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'taskId' })
+      }
+    }
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function saveSiteToDb(taskId: string, params: SplatParams, rasterBuffer: ArrayBuffer): Promise<void> {
+  const db = await openCoverageDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    tx.objectStore(STORE_NAME).put({ taskId, params, rasterBuffer })
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+async function deleteSiteFromDb(taskId: string): Promise<void> {
+  const db = await openCoverageDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    tx.objectStore(STORE_NAME).delete(taskId)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+async function loadAllSitesFromDb(): Promise<Array<{ taskId: string; params: SplatParams; rasterBuffer: ArrayBuffer }>> {
+  const db = await openCoverageDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly')
+    const request = tx.objectStore(STORE_NAME).getAll()
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Store
+// ---------------------------------------------------------------------------
 
 export const useSitesStore = defineStore('sites', {
   state: () => ({
     localSites: [] as Site[],
-    simulationState: 'idle' as string,
-    splatParams: <SplatParams>{
-      transmitter: {
-        name: randanimalSync(),
-        tx_lat: 51.102167,
-        tx_lon: -114.098667,
-        tx_power: 0.1,
-        tx_freq: 907.0,
-        tx_height: 2.0,
-        tx_gain: 2.0,
-      },
-      receiver: {
-        rx_sensitivity: -130.0,
-        rx_height: 1.0,
-        rx_gain: 2.0,
-        rx_loss: 2.0,
-      },
+    splatParams: <SharedSettings>{
       environment: {
-        radio_climate: 'continental_temperate',
+        radio_climate: 'continental_subtropical',
         polarization: 'vertical',
-        clutter_height: 1.0,
+        clutter_height: 10.0,
         ground_dielectric: 15.0,
         ground_conductivity: 0.005,
         atmosphere_bending: 301.0,
@@ -39,22 +80,56 @@ export const useSitesStore = defineStore('sites', {
       simulation: {
         situation_fraction: 95.0,
         time_fraction: 95.0,
-        simulation_extent: 30.0,
-        high_resolution: false,
+        simulation_extent: 90.0,
+        high_resolution: true,
       },
       display: {
         color_scale: 'plasma',
-        min_dbm: -130.0,
-        max_dbm: -80.0,
+        min_dbm: -140.0,
+        max_dbm: -60.0,
         overlay_transparency: 50,
       },
     },
   }),
   actions: {
-    setTxCoords(lat: number, lon: number) {
-      this.splatParams.transmitter.tx_lat = lat
-      this.splatParams.transmitter.tx_lon = lon
+    // -----------------------------------------------------------------------
+    // Centralized site creation from an ArrayBuffer
+    // -----------------------------------------------------------------------
+
+    async addSiteFromBuffer(taskId: string, arrayBuffer: ArrayBuffer, params: SplatParams) {
+      // Keep an independent copy — parseGeoraster may detach the original buffer
+      const rasterCopy = arrayBuffer.slice(0)
+      const geoRaster = await parseGeoraster(rasterCopy)
+      this.localSites.push({
+        params: cloneObject(params),
+        taskId,
+        raster: markRaw(geoRaster),
+        visible: true,
+        rasterData: arrayBuffer,
+      })
+      this.redrawSites()
+      saveSiteToDb(taskId, cloneObject(params), arrayBuffer).catch((err) =>
+        console.warn('[IndexedDB] Failed to save site:', err),
+      )
     },
+
+    // -----------------------------------------------------------------------
+    // Remove
+    // -----------------------------------------------------------------------
+
+    removeAllSites() {
+      const mapStore = useMapStore()
+      for (const site of this.localSites) {
+        if (site.rasterLayer && mapStore.map) {
+          mapStore.map.removeLayer(site.rasterLayer)
+        }
+        deleteSiteFromDb(site.taskId).catch(err =>
+          console.warn('[IndexedDB] Failed to delete site:', err)
+        )
+      }
+      this.localSites = []
+    },
+
     removeSite(index: number) {
       const mapStore = useMapStore()
       if (!mapStore.map) return
@@ -62,141 +137,121 @@ export const useSitesStore = defineStore('sites', {
       if (site.rasterLayer) {
         mapStore.map.removeLayer(site.rasterLayer)
       }
+      deleteSiteFromDb(site.taskId).catch((err) =>
+        console.warn('[IndexedDB] Failed to delete site:', err),
+      )
       this.localSites.splice(index, 1)
     },
-    redrawSites() {
+
+    // -----------------------------------------------------------------------
+    // Visibility toggles
+    // -----------------------------------------------------------------------
+
+    toggleSiteVisibility(index: number) {
+      const mapStore = useMapStore()
+      if (!mapStore.map) return
+      const site = this.localSites[index]
+      if (!site.rasterLayer) return
+      if (site.visible) {
+        mapStore.map.removeLayer(site.rasterLayer)
+        site.visible = false
+      } else {
+        site.rasterLayer.addTo(mapStore.map as L.Map)
+        site.rasterLayer.bringToFront()
+        site.visible = true
+      }
+    },
+
+    hideAllOverlays() {
       const mapStore = useMapStore()
       if (!mapStore.map) return
       this.localSites.forEach((site: Site) => {
-        if (!site.rasterLayer) {
-          // Pre-extract palette to avoid Vue Proxy wrapping in the rendering hot path.
-          // geotiff-palette hardcodes alpha=255 for all entries so we handle noData (index 255)
-          // explicitly by returning null.
-          const palette = (site.raster as any).palette as Array<[number, number, number, number]>
-          const opacity = site.params.display.overlay_transparency / 100
+        if (site.visible && site.rasterLayer) {
+          mapStore.map!.removeLayer(site.rasterLayer)
+          site.visible = false
+        }
+      })
+    },
+
+    showAllOverlays() {
+      const mapStore = useMapStore()
+      if (!mapStore.map) return
+      this.localSites.forEach((site: Site) => {
+        if (!site.visible && site.rasterLayer) {
+          site.rasterLayer.addTo(mapStore.map as L.Map)
+          site.rasterLayer.bringToFront()
+          site.visible = true
+        }
+      })
+    },
+
+    // -----------------------------------------------------------------------
+    // Redraw (creates GeoRasterLayer for new sites)
+    // -----------------------------------------------------------------------
+
+    redrawSites(forceRecreate = false) {
+      const mapStore = useMapStore()
+      if (!mapStore.map) return
+      const colormap = this.splatParams.display.color_scale
+      const opacity = this.splatParams.display.overlay_transparency / 100
+      this.localSites.forEach((site: Site) => {
+        if (!site.rasterLayer || forceRecreate) {
+          // Remove old layer if force-recreating
+          if (site.rasterLayer && mapStore.map) {
+            mapStore.map.removeLayer(site.rasterLayer)
+          }
+          // Client-side colormap: pixel values are grayscale (0-254 = signal, 255 = noData)
           site.rasterLayer = markRaw(new GeoRasterLayer({
             georaster: site.raster,
             opacity,
             resolution: 256,
             pixelValuesToColorFn: (values: number[]) => {
               const idx = values[0]
-              if (idx === 255 || !palette) return null // noData → transparent
-              const [r, g, b] = palette[idx]
+              if (idx === 255) return null // noData → transparent
+              const t = idx / 254 // normalize to [0, 1]
+              const [r, g, b] = colormapLookup(colormap, t)
               return `rgba(${r},${g},${b},1)`
             },
           }))
-          site.rasterLayer.addTo(mapStore.map as L.Map)
+          if (site.visible !== false) {
+            site.rasterLayer.addTo(mapStore.map as L.Map)
+            site.rasterLayer.bringToFront()
+          }
+        } else if (site.visible) {
           site.rasterLayer.bringToFront()
         }
       })
     },
-    async runSimulation() {
-      const mapStore = useMapStore()
-      console.log('Simulation running...')
+
+    // -----------------------------------------------------------------------
+    // Restore from IndexedDB (called on map init)
+    // -----------------------------------------------------------------------
+
+    async restoreFromIndexedDB() {
       try {
-        // Collect input values
-        const payload = {
-          // Transmitter parameters
-          lat: this.splatParams.transmitter.tx_lat,
-          lon: this.splatParams.transmitter.tx_lon,
-          tx_height: this.splatParams.transmitter.tx_height,
-          tx_power: 10 * Math.log10(this.splatParams.transmitter.tx_power) + 30,
-          tx_gain: this.splatParams.transmitter.tx_gain,
-          frequency_mhz: this.splatParams.transmitter.tx_freq,
+        const records = await loadAllSitesFromDb()
+        const existingTaskIds = new Set(this.localSites.map((s) => s.taskId))
 
-          // Receiver parameters
-          rx_height: this.splatParams.receiver.rx_height,
-          rx_gain: this.splatParams.receiver.rx_gain,
-          signal_threshold: this.splatParams.receiver.rx_sensitivity,
-          system_loss: this.splatParams.receiver.rx_loss,
-
-          // Environment parameters
-          clutter_height: this.splatParams.environment.clutter_height,
-          ground_dielectric: this.splatParams.environment.ground_dielectric,
-          ground_conductivity: this.splatParams.environment.ground_conductivity,
-          atmosphere_bending: this.splatParams.environment.atmosphere_bending,
-          radio_climate: this.splatParams.environment.radio_climate,
-          polarization: this.splatParams.environment.polarization,
-
-          // Simulation parameters
-          radius: this.splatParams.simulation.simulation_extent * 1000,
-          situation_fraction: this.splatParams.simulation.situation_fraction,
-          time_fraction: this.splatParams.simulation.time_fraction,
-          high_resolution: this.splatParams.simulation.high_resolution,
-
-          // Display parameters
-          colormap: this.splatParams.display.color_scale,
-          min_dbm: this.splatParams.display.min_dbm,
-          max_dbm: this.splatParams.display.max_dbm,
+        for (const record of records) {
+          if (existingTaskIds.has(record.taskId)) continue
+          const copy = record.rasterBuffer.slice(0)
+          const geoRaster = await parseGeoraster(copy)
+          this.localSites.push({
+            params: record.params,
+            taskId: record.taskId,
+            raster: markRaw(geoRaster),
+            visible: true,
+            rasterData: record.rasterBuffer,
+          })
         }
 
-        console.log('Payload:', payload)
-        this.simulationState = 'running'
-
-        // Send the request to the backend's /predict endpoint
-        const predictResponse = await fetch('/predict', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        })
-
-        if (!predictResponse.ok) {
-          this.simulationState = 'failed'
-          const errorDetails = await predictResponse.text()
-          throw new Error(`Failed to start prediction: ${errorDetails}`)
-        }
-
-        const predictData = await predictResponse.json()
-        const taskId = predictData.task_id
-
-        console.log(`Prediction started with task ID: ${taskId}`)
-
-        // Poll for task status and result
-        const pollInterval = 1000 // 1 second
-        const pollStatus = async () => {
-          const statusResponse = await fetch(`/status/${taskId}`)
-          if (!statusResponse.ok) {
-            throw new Error('Failed to fetch task status.')
-          }
-
-          const statusData = await statusResponse.json()
-          console.log('Task status:', statusData)
-
-          if (statusData.status === 'completed') {
-            this.simulationState = 'completed'
-            console.log('Simulation completed! Adding result to the map...')
-
-            // Fetch the GeoTIFF data
-            const resultResponse = await fetch(`/result/${taskId}`)
-            if (!resultResponse.ok) {
-              throw new Error('Failed to fetch simulation result.')
-            } else {
-              const arrayBuffer = await resultResponse.arrayBuffer()
-              const geoRaster = await parseGeoraster(arrayBuffer)
-              this.localSites.push({
-                params: cloneObject(this.splatParams),
-                taskId,
-                raster: geoRaster,
-              })
-              if (mapStore.currentMarker && mapStore.map) {
-                mapStore.currentMarker.removeFrom(mapStore.map as L.Map)
-              }
-              this.splatParams.transmitter.name = await randanimalSync()
-              this.redrawSites()
-            }
-          } else if (statusData.status === 'failed') {
-            this.simulationState = 'failed'
-          } else {
-            setTimeout(pollStatus, pollInterval) // Retry after interval
-          }
-        }
-
-        pollStatus() // Start polling
-      } catch (error) {
-        console.error('Error:', error)
+        this.redrawSites()
+      } catch (err) {
+        console.warn('[IndexedDB] Failed to restore sites:', err)
+        // Fallback: just redraw whatever is in memory
+        this.redrawSites()
       }
     },
+
   },
 })

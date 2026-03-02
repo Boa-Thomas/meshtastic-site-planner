@@ -5,6 +5,7 @@ import type {
   SimulationConfig,
   SimulationMetrics,
   LinkInfo,
+  RssiOverrideMap,
 } from './types'
 import { createDefaultConfig } from './types'
 import { EventQueue } from './EventQueue'
@@ -34,6 +35,12 @@ export class SimulationEngine {
   private linkCache = new Map<string, LinkInfo>()
 
   /**
+   * Optional RSSI overrides from SPLAT! raster data.
+   * When present, these values replace the FSPL-computed RSSI for specific node pairs.
+   */
+  private rssiOverrides: RssiOverrideMap
+
+  /**
    * Optional callback invoked after every processed event.
    * Useful for real-time visualisation or progress reporting.
    */
@@ -43,10 +50,12 @@ export class SimulationEngine {
     nodes: MeshNode[],
     channelPreset: ChannelPreset,
     config?: Partial<SimulationConfig>,
+    rssiOverrides?: RssiOverrideMap,
   ) {
     this.nodes = [...nodes]
     this.channelPreset = channelPreset
     this.config = { ...createDefaultConfig(), ...config }
+    this.rssiOverrides = rssiOverrides ?? new Map()
     this.protocol = new MeshtasticProtocol(this.config)
     this.buildLinkCache()
   }
@@ -61,7 +70,17 @@ export class SimulationEngine {
       for (const to of this.nodes) {
         if (from.id === to.id) continue
         const key = `${from.id}->${to.id}`
-        this.linkCache.set(key, LinkBudget.calculateFSPL(from, to))
+        const link = LinkBudget.calculateFSPL(from, to, this.config.pathLossConfig)
+
+        // Apply RSSI override from SPLAT! raster if available
+        const overrideRssi = this.rssiOverrides.get(key)
+        if (overrideRssi !== undefined) {
+          link.rssiDbm = overrideRssi
+          link.snrDb = overrideRssi - (this.config.noiseFloorDbm)
+          link.canHear = overrideRssi >= to.rxSensitivityDbm
+        }
+
+        this.linkCache.set(key, link)
       }
     }
   }

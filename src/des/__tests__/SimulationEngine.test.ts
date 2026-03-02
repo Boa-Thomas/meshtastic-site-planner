@@ -4,11 +4,11 @@
  * Node placement rationale (all using LONG_FAST / 915 MHz / txPowerDbm=22):
  *
  * LINEAR topology (A can reach B, B can reach C, A cannot reach C):
- *   - A at (0, 0), B at (0, 0.5), C at (0, 1.0)
- *   - obstructionLevel: 'heavy' on all nodes (adds 15 dB TX + 15 dB RX = 30 dB total)
- *   - A-B distance ≈ 55.6 km → RSSI ≈ -132.6 dBm  > -136 → A HEARS B
- *   - B-C distance ≈ 55.6 km → RSSI ≈ -132.6 dBm  > -136 → B HEARS C
- *   - A-C distance ≈ 111.2 km → RSSI ≈ -138.6 dBm < -136 → A CANNOT HEAR C
+ *   - A at (0, 0), B at (0, 0.15), C at (0, 0.30)
+ *   - obstructionLevel: 'heavy' on all nodes (adds 20 dB TX + 20 dB RX = 40 dB total)
+ *   - A-B distance ≈ 16.7 km → RSSI ≈ -132.1 dBm  > -136 → A HEARS B
+ *   - B-C distance ≈ 16.7 km → RSSI ≈ -132.1 dBm  > -136 → B HEARS C
+ *   - A-C distance ≈ 33.4 km → RSSI ≈ -138.1 dBm < -136 → A CANNOT HEAR C
  *
  * TRIANGLE topology (all nodes within range of each other):
  *   - All 3 nodes within 200 m → RSSI ≈ -50 dBm >> -136 → all hear each other
@@ -73,8 +73,8 @@ function makeNode(
 function makeLinearNodes(hopLimit = 3): MeshNode[] {
   return [
     makeNode('A', 0, 0, { obstructionLevel: 'heavy', hopLimit }),
-    makeNode('B', 0, 0.5, { obstructionLevel: 'heavy', hopLimit }),
-    makeNode('C', 0, 1.0, { obstructionLevel: 'heavy', hopLimit }),
+    makeNode('B', 0, 0.15, { obstructionLevel: 'heavy', hopLimit }),
+    makeNode('C', 0, 0.30, { obstructionLevel: 'heavy', hopLimit }),
   ]
 }
 
@@ -683,6 +683,90 @@ describe('SimulationEngine — routePath tracking', () => {
 })
 
 // ---------------------------------------------------------------------------
+// describe: RSSI override map (SPLAT! raster integration)
+// ---------------------------------------------------------------------------
+
+describe('SimulationEngine — RSSI override map', () => {
+  it('override replaces FSPL-computed RSSI for specified link', () => {
+    const nodes = makeTriangleNodes()
+    const overrides = new Map<string, number>()
+    overrides.set('A->B', -95)
+
+    const engine = new SimulationEngine(nodes, LONG_FAST, { durationMs: 60_000 }, overrides)
+
+    const linkAB = engine.getLinkInfo('A', 'B')
+    expect(linkAB).toBeDefined()
+    expect(linkAB!.rssiDbm).toBe(-95)
+  })
+
+  it('override updates SNR based on noise floor', () => {
+    const nodes = makeTriangleNodes()
+    const overrides = new Map<string, number>()
+    overrides.set('A->B', -100)
+
+    const engine = new SimulationEngine(nodes, LONG_FAST, {
+      durationMs: 60_000,
+      noiseFloorDbm: -120,
+    }, overrides)
+
+    const linkAB = engine.getLinkInfo('A', 'B')
+    expect(linkAB).toBeDefined()
+    // SNR = -100 - (-120) = 20
+    expect(linkAB!.snrDb).toBe(20)
+  })
+
+  it('override updates canHear based on receiver sensitivity', () => {
+    const nodes = makeTriangleNodes()
+    // Set a very weak override that is below the receiver sensitivity (-136 dBm)
+    const overrides = new Map<string, number>()
+    overrides.set('A->B', -140)
+
+    const engine = new SimulationEngine(nodes, LONG_FAST, { durationMs: 60_000 }, overrides)
+
+    const linkAB = engine.getLinkInfo('A', 'B')
+    expect(linkAB).toBeDefined()
+    expect(linkAB!.canHear).toBe(false)
+  })
+
+  it('non-overridden links still use FSPL', () => {
+    const nodes = makeTriangleNodes()
+    const overrides = new Map<string, number>()
+    overrides.set('A->B', -95)
+
+    const engineWithOverride = new SimulationEngine(nodes, LONG_FAST, { durationMs: 60_000 }, overrides)
+    const engineNoOverride = new SimulationEngine(makeTriangleNodes(), LONG_FAST, { durationMs: 60_000 })
+
+    // B->C should be identical (no override for that pair)
+    const linkBC_override = engineWithOverride.getLinkInfo('B', 'C')
+    const linkBC_plain = engineNoOverride.getLinkInfo('B', 'C')
+    expect(linkBC_override!.rssiDbm).toBeCloseTo(linkBC_plain!.rssiDbm, 5)
+  })
+
+  it('empty override map behaves identically to no overrides', () => {
+    const engine1 = new SimulationEngine(makeTriangleNodes(), LONG_FAST, { durationMs: 60_000 }, new Map())
+    const engine2 = new SimulationEngine(makeTriangleNodes(), LONG_FAST, { durationMs: 60_000 })
+
+    const link1 = engine1.getLinkInfo('A', 'B')
+    const link2 = engine2.getLinkInfo('A', 'B')
+    expect(link1!.rssiDbm).toBeCloseTo(link2!.rssiDbm, 5)
+  })
+
+  it('simulation completes with overrides in place', () => {
+    const nodes = makeTriangleNodes()
+    const overrides = new Map<string, number>()
+    overrides.set('A->B', -90)
+    overrides.set('B->A', -90)
+
+    const engine = new SimulationEngine(nodes, LONG_FAST, { durationMs: 60_000 }, overrides)
+    engine.sendBroadcast('A')
+    const metrics = engine.run()
+
+    expect(engine.hasPendingEvents).toBe(false)
+    expect(metrics.totalMessagesDelivered).toBeGreaterThan(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // describe: window installation creates asymmetric links
 // ---------------------------------------------------------------------------
 
@@ -691,7 +775,7 @@ describe('SimulationEngine — window install asymmetric links', () => {
     const nodeA = makeNode('A', 0, 0)
     const nodeB = makeNode('B', 0, 0.001, {
       installationType: 'window',
-      windowAzimuth: 270,  // facing West, which is toward A
+      windowCone: { startDeg: 210, endDeg: 330 },  // facing West, which is toward A
     })
     const engine = new SimulationEngine([nodeA, nodeB], LONG_FAST)
 
@@ -710,7 +794,7 @@ describe('SimulationEngine — window install asymmetric links', () => {
     const nodeA = makeNode('A', 0, 0)
     const nodeB_facing_away = makeNode('B', 0, 0.5, {
       installationType: 'window',
-      windowAzimuth: 90,  // facing East, away from A
+      windowCone: { startDeg: 30, endDeg: 150 },  // facing East, away from A
       obstructionLevel: 'heavy',
     })
     const nodeB_omni = makeNode('B_omni', 0, 0.5, {

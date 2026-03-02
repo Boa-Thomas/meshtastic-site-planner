@@ -162,6 +162,18 @@ describe('nodesStore', () => {
       expect(node.rxGainDbi).toBe(2.0)
       expect(node.rxLossDb).toBe(2.0)
     })
+
+    it('has elevationM undefined by default', () => {
+      const store = useNodesStore()
+      const node = store.createDefaultNode(0, 0, 'Node')
+      expect(node.elevationM).toBeUndefined()
+    })
+
+    it('has windowCone undefined by default', () => {
+      const store = useNodesStore()
+      const node = store.createDefaultNode(0, 0, 'Node')
+      expect(node.windowCone).toBeUndefined()
+    })
   })
 
   // ---------------------------------------------------------------------------

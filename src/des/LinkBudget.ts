@@ -1,20 +1,42 @@
 import type { MeshNode } from '../types'
-import type { LinkInfo } from './types'
+import type { LinkInfo, PathLossConfig } from './types'
 
 export class LinkBudget {
-  /** Typical field of view for a window installation (degrees). */
-  static readonly WINDOW_BEAMWIDTH = 120
+  /** Default field of view for a window installation when no cone is configured (degrees). */
+  static readonly DEFAULT_WINDOW_BEAMWIDTH = 120
 
   /**
-   * Calculate link budget between two nodes using Free Space Path Loss (FSPL).
-   * This is the fallback model used when SPLAT! GeoRaster data is unavailable.
-   * Mode A (GeoRaster integration) will be implemented in Phase 6.
+   * Convert a windowCone { startDeg, endDeg } to { center, beamwidth }.
+   * Handles wrap-around (e.g. start=270, end=90 → north-facing window).
+   */
+  static windowConeToBeam(startDeg: number, endDeg: number): { center: number; beamwidth: number } {
+    if (endDeg >= startDeg) {
+      return {
+        center: (startDeg + endDeg) / 2,
+        beamwidth: endDeg - startDeg,
+      }
+    }
+    // Wrap-around case (e.g. 270° → 90°)
+    const beamwidth = 360 - startDeg + endDeg
+    const center = ((startDeg + endDeg + 360) / 2) % 360
+    return { center, beamwidth }
+  }
+
+  /**
+   * Calculate link budget between two nodes using Free Space Path Loss (FSPL)
+   * with optional dual-slope extension for beyond-breakpoint attenuation.
+   *
+   * When `pathLossConfig` is provided and distance exceeds the breakpoint,
+   * a steeper path loss exponent is applied:
+   *   d ≤ breakpoint:  FSPL = 20·log10(d) + 20·log10(f) + 32.44
+   *   d > breakpoint:  PL = FSPL(bp) + 10·n·log10(d/bp)
    *
    * @param from - transmitting node
    * @param to - receiving node
+   * @param pathLossConfig - optional dual-slope parameters (omit for pure FSPL)
    * @returns LinkInfo with RSSI, SNR, distance, and canHear flag
    */
-  static calculateFSPL(from: MeshNode, to: MeshNode): LinkInfo {
+  static calculateFSPL(from: MeshNode, to: MeshNode, pathLossConfig?: PathLossConfig): LinkInfo {
     const distanceKm = LinkBudget.haversineKm(from.lat, from.lon, to.lat, to.lon)
 
     if (distanceKm < 0.001) {
@@ -29,9 +51,19 @@ export class LinkBudget {
       }
     }
 
-    // Free Space Path Loss in dB:
-    //   FSPL(dB) = 20·log10(d_km) + 20·log10(f_MHz) + 32.44
-    const fspl = 20 * Math.log10(distanceKm) + 20 * Math.log10(from.frequencyMhz) + 32.44
+    // Path loss calculation: pure FSPL or dual-slope
+    let pathLoss: number
+    const freqLog = 20 * Math.log10(from.frequencyMhz) + 32.44
+
+    if (pathLossConfig && distanceKm > pathLossConfig.breakpointKm) {
+      // Dual-slope: FSPL up to breakpoint, then steeper exponent beyond
+      const fsplAtBreakpoint = 20 * Math.log10(pathLossConfig.breakpointKm) + freqLog
+      pathLoss = fsplAtBreakpoint + 10 * pathLossConfig.pathLossExponent * Math.log10(distanceKm / pathLossConfig.breakpointKm)
+    } else {
+      // Pure FSPL: 20·log10(d_km) + 20·log10(f_MHz) + 32.44
+      pathLoss = 20 * Math.log10(distanceKm) + freqLog
+    }
+    const fspl = pathLoss
 
     // EIRP = transmit power (dBm) + transmitter antenna gain (dBi)
     const eirp = from.txPowerDbm + from.txGainDbi
@@ -53,10 +85,15 @@ export class LinkBudget {
     }
 
     // Window installation loss for the transmitter (restricted field of view)
-    if (from.installationType === 'window' && from.windowAzimuth !== undefined) {
+    if (from.installationType === 'window') {
       const bearing = LinkBudget.bearingDeg(from.lat, from.lon, to.lat, to.lon)
-      const offAxis = Math.abs(LinkBudget.angleDiff(bearing, from.windowAzimuth))
-      rssiDbm -= LinkBudget.directionalLoss(offAxis, LinkBudget.WINDOW_BEAMWIDTH)
+      if (from.windowCone) {
+        const { center, beamwidth } = LinkBudget.windowConeToBeam(from.windowCone.startDeg, from.windowCone.endDeg)
+        const offAxis = Math.abs(LinkBudget.angleDiff(bearing, center))
+        rssiDbm -= LinkBudget.directionalLoss(offAxis, beamwidth)
+      } else {
+        // Fallback: no cone configured → no window loss (omnidirectional)
+      }
     }
 
     // Apply directional antenna off-axis loss for the receiver
@@ -69,10 +106,15 @@ export class LinkBudget {
     }
 
     // Window installation loss for the receiver (restricted field of view)
-    if (to.installationType === 'window' && to.windowAzimuth !== undefined) {
+    if (to.installationType === 'window') {
       const bearing = LinkBudget.bearingDeg(to.lat, to.lon, from.lat, from.lon)
-      const offAxis = Math.abs(LinkBudget.angleDiff(bearing, to.windowAzimuth))
-      rssiDbm -= LinkBudget.directionalLoss(offAxis, LinkBudget.WINDOW_BEAMWIDTH)
+      if (to.windowCone) {
+        const { center, beamwidth } = LinkBudget.windowConeToBeam(to.windowCone.startDeg, to.windowCone.endDeg)
+        const offAxis = Math.abs(LinkBudget.angleDiff(bearing, center))
+        rssiDbm -= LinkBudget.directionalLoss(offAxis, beamwidth)
+      } else {
+        // Fallback: no cone configured → no window loss (omnidirectional)
+      }
     }
 
     // SNR approximation: RSSI minus the ambient noise floor
@@ -173,9 +215,9 @@ export class LinkBudget {
   static obstructionLoss(level: string): number {
     switch (level) {
       case 'partial':
-        return 6
+        return 8
       case 'heavy':
-        return 15
+        return 20
       default:
         return 0
     }

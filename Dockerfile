@@ -28,8 +28,9 @@ WORKDIR /app/splat
 RUN sed -i 's/\r//' build configure install && \
     chmod +x build && chmod +x configure && chmod +x install
 
-# Modify build script and configure SPLAT
+# Modify build script and configure SPLAT (use -O3 for max vectorization/inlining)
 RUN sed -i.bak 's/-march=\$cpu/-march=native/g' build && \
+    sed -i 's/-O2/-O3/g' build && \
     printf "8\n4\n" | ./configure && \
     ./install splat
 # RUN cp ./splat /app/splat
@@ -37,7 +38,8 @@ RUN sed -i.bak 's/-march=\$cpu/-march=native/g' build && \
 # SPLAT utils including srtm2sdf
 WORKDIR /app/splat/utils
 RUN sed -i 's/\r//' build && chmod +x build
-RUN ./build all && cp srtm2sdf /app && cp srtm2sdf-hd /app
+RUN sed -i 's/-O2/-O3/g' build && \
+    ./build all && cp srtm2sdf /app && cp srtm2sdf-hd /app
 RUN cp -a ./ /app/splat
 
 WORKDIR /app

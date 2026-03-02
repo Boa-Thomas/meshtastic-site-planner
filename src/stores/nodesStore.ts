@@ -55,15 +55,15 @@ export const useNodesStore = defineStore('nodes', {
     },
     applyDevicePreset(nodeId: string, presetId: string) {
       const preset = devicePresets.find(p => p.id === presetId)
-      const node = this.nodes.find(n => n.id === nodeId)
-      if (!preset || !node) return
-      node.devicePresetId = presetId
-      node.txPowerW = preset.txPowerW
-      node.txPowerDbm = preset.txPowerDbm
-      node.frequencyMhz = preset.frequencyMhz
-      node.txGainDbi = preset.antennaGainDbi
-      node.rxSensitivityDbm = preset.rxSensitivityDbm
-      saveNodes(this.nodes)
+      if (!preset) return
+      this.updateNode(nodeId, {
+        devicePresetId: presetId,
+        txPowerW: preset.txPowerW,
+        txPowerDbm: preset.txPowerDbm,
+        frequencyMhz: preset.frequencyMhz,
+        txGainDbi: preset.antennaGainDbi,
+        rxSensitivityDbm: preset.rxSensitivityDbm,
+      })
     },
     applyChannelPreset(nodeId: string, presetId: ChannelPresetId) {
       const preset = channelPresets.find(p => p.id === presetId)
@@ -92,7 +92,24 @@ export const useNodesStore = defineStore('nodes', {
         obstructionLevel: 'clear',
         channelPresetId: DEFAULT_CHANNEL_PRESET_ID,
         hopLimit: 3,
+        elevationM: undefined,
+        windowCone: undefined,
       }
+    },
+    clearAllNodes() {
+      this.nodes = []
+      this.selectedNodeId = null
+      saveNodes(this.nodes)
+    },
+    clearAllSiteIds() {
+      let changed = false
+      for (const node of this.nodes) {
+        if (node.siteId) {
+          node.siteId = undefined
+          changed = true
+        }
+      }
+      if (changed) saveNodes(this.nodes)
     },
     startPlacingNode() {
       this.isPlacingNode = true

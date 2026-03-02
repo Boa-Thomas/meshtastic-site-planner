@@ -25,6 +25,46 @@
       />
     </div>
 
+    <!-- Coordinates + Altitude -->
+    <div class="row g-2 mt-2">
+      <div class="col-6">
+        <label class="form-label">Latitude</label>
+        <input
+          type="number"
+          class="form-control form-control-sm"
+          :value="node.lat"
+          step="0.000001"
+          @input="nodesStore.updateNode(node!.id, { lat: parseFloat(($event.target as HTMLInputElement).value) })"
+        />
+      </div>
+      <div class="col-6">
+        <label class="form-label">Longitude</label>
+        <input
+          type="number"
+          class="form-control form-control-sm"
+          :value="node.lon"
+          step="0.000001"
+          @input="nodesStore.updateNode(node!.id, { lon: parseFloat(($event.target as HTMLInputElement).value) })"
+        />
+      </div>
+      <div class="col-12">
+        <div class="d-flex align-items-center gap-2">
+          <button
+            type="button"
+            class="btn btn-outline-info btn-sm"
+            :disabled="fetchingAltitude"
+            @click="fetchAltitude"
+          >
+            <span v-if="fetchingAltitude" class="spinner-border spinner-border-sm me-1"></span>
+            Fetch Altitude
+          </button>
+          <span v-if="node.elevationM !== undefined" class="small text-muted">
+            {{ node.elevationM }}m MSL
+          </span>
+        </div>
+      </div>
+    </div>
+
     <!-- Essential parameters (always visible) -->
     <div class="row g-2 mt-2">
       <div class="col-6">
@@ -127,15 +167,15 @@
         </div>
       </div>
 
-      <!-- Installation type + obstruction + window azimuth -->
+      <!-- Installation type + obstruction + window cone -->
       <div class="mt-2">
         <InstallationConfig
           :installationType="node.installationType"
           :obstructionLevel="node.obstructionLevel"
-          :windowAzimuth="node.windowAzimuth"
+          :windowCone="node.windowCone"
           @update:installationType="v => nodesStore.updateNode(node!.id, { installationType: v })"
           @update:obstructionLevel="v => nodesStore.updateNode(node!.id, { obstructionLevel: v })"
-          @update:windowAzimuth="v => nodesStore.updateNode(node!.id, { windowAzimuth: v })"
+          @update:windowCone="v => nodesStore.updateNode(node!.id, { windowCone: v })"
         />
       </div>
 
@@ -188,6 +228,27 @@ defineEmits<{ runCoverage: [nodeId: string] }>()
 const nodesStore = useNodesStore()
 const node = computed(() => nodesStore.selectedNode)
 const showAdvanced = ref(false)
+const fetchingAltitude = ref(false)
+
+async function fetchAltitude() {
+  if (!node.value) return
+  fetchingAltitude.value = true
+  try {
+    const res = await fetch(
+      `https://api.open-meteo.com/v1/elevation?latitude=${node.value.lat}&longitude=${node.value.lon}`
+    )
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    const elevation = data.elevation?.[0]
+    if (typeof elevation === 'number') {
+      nodesStore.updateNode(node.value.id, { elevationM: Math.round(elevation) })
+    }
+  } catch (err) {
+    console.error('[NodeEditor] Failed to fetch altitude:', err)
+  } finally {
+    fetchingAltitude.value = false
+  }
+}
 
 function onDeviceChange(presetId: string) {
   if (!node.value) return

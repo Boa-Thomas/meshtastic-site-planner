@@ -10,6 +10,8 @@ Endpoints:
     - /result/{task_id}: Retrieves the result (GeoTIFF file) of a given prediction task.
 """
 
+import asyncio
+import json
 import os
 import redis
 from fastapi import FastAPI, BackgroundTasks
@@ -95,9 +97,8 @@ async def predict(request: Request, payload: CoveragePredictionRequest, backgrou
     Predict signal coverage using SPLAT!.
     Accepts a CoveragePredictionRequest and processes it in the background.
 
-    - Generates a unique task ID.
-    - Sets the initial task status to "processing" in Redis.
-    - Adds the `run_splat` function to the background task queue.
+    Returns a cached result if the same RF parameters have been computed before.
+    Display-only parameters (colormap, min_dbm, max_dbm) are excluded from the cache key.
 
     Args:
         payload (CoveragePredictionRequest): The parameters required for the SPLAT! coverage prediction.
@@ -106,8 +107,19 @@ async def predict(request: Request, payload: CoveragePredictionRequest, backgrou
     Returns:
         JSONResponse: A response containing the unique task ID to track the prediction progress.
     """
+    # Check RF parameter cache — return existing task if same RF params were already computed
+    rf_hash = payload.rf_param_hash()
+    cached_task_id = redis_client.get(f"rfcache:{rf_hash}")
+    if cached_task_id:
+        cached_task_id = cached_task_id.decode("utf-8")
+        cached_status = redis_client.get(f"{cached_task_id}:status")
+        if cached_status and cached_status.decode("utf-8") in ("completed", "processing"):
+            logger.info(f"RF cache hit for hash {rf_hash}, returning task {cached_task_id}")
+            return JSONResponse({"task_id": cached_task_id, "cached": True})
+
     task_id = str(uuid4())
     redis_client.setex(f"{task_id}:status", 3600, "processing")
+    redis_client.setex(f"rfcache:{rf_hash}", 3600, task_id)
     background_tasks.add_task(run_splat, task_id, payload)
     return JSONResponse({"task_id": task_id})
 
@@ -133,6 +145,32 @@ async def get_status(task_id: UUID):
         return JSONResponse({"error": "Task not found"}, status_code=404)
 
     return JSONResponse({"task_id": tid, "status": status.decode("utf-8")})
+
+@app.get("/events/{task_id}")
+async def task_events(task_id: UUID):
+    """
+    Server-Sent Events stream for real-time task status updates.
+    Streams status every 500ms until the task completes or fails.
+    """
+    tid = str(task_id)
+
+    async def event_generator():
+        while True:
+            status = redis_client.get(f"{tid}:status")
+            if not status:
+                yield f"data: {json.dumps({'task_id': tid, 'status': 'not_found'})}\n\n"
+                return
+            status_str = status.decode("utf-8")
+            yield f"data: {json.dumps({'task_id': tid, 'status': status_str})}\n\n"
+            if status_str in ("completed", "failed"):
+                return
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 @app.get("/result/{task_id}")
 async def get_result(task_id: UUID):

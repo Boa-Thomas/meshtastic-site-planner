@@ -10,8 +10,8 @@ export interface SharedSettings {
 // Additional system loss in dB based on obstruction level at the site
 const obstructionLossDb: Record<string, number> = {
   clear: 0,
-  partial: 6,
-  heavy: 15,
+  partial: 8,
+  heavy: 20,
 }
 
 // Effective height multiplier based on installation type.
@@ -24,14 +24,6 @@ const installationHeightFactor: Record<string, number> = {
   tower: 1.0,
 }
 
-// Clutter height in metres corresponding to each obstruction level.
-// Used as input to the ITM/ITWOM model inside SPLAT!.
-const clutterHeightM: Record<string, number> = {
-  clear: 1.0,
-  partial: 2.0,
-  heavy: 5.0,
-}
-
 /**
  * Converts a MeshNode planning entity into the SplatParams format expected
  * by the /predict API endpoint.
@@ -39,7 +31,10 @@ const clutterHeightM: Record<string, number> = {
  * Notable transformations:
  * - txHeight is multiplied by the installation-type height factor
  * - obstructionLevel adds extra system loss on the receiver side
- * - clutter_height is derived from obstructionLevel
+ *
+ * Note: clutter_height is an environmental path parameter (average canopy
+ * along the propagation path) and comes from shared environment settings.
+ * Local obstruction at the site is modelled by obstructionLossDb instead.
  */
 export function nodeToSplatParams(node: MeshNode, shared?: SharedSettings): SplatParams {
   const effectiveHeight =
@@ -64,11 +59,11 @@ export function nodeToSplatParams(node: MeshNode, shared?: SharedSettings): Spla
       rx_loss: node.rxLossDb + extraLoss,
     },
     environment: shared
-      ? { ...shared.environment, clutter_height: clutterHeightM[node.obstructionLevel] ?? 1.0 }
+      ? { ...shared.environment }
       : {
           radio_climate: 'continental_temperate',
           polarization: 'vertical',
-          clutter_height: clutterHeightM[node.obstructionLevel] ?? 1.0,
+          clutter_height: 10.0,
           ground_dielectric: 15.0,
           ground_conductivity: 0.005,
           atmosphere_bending: 301.0,

@@ -23,6 +23,14 @@
           <input type="number" class="form-control form-control-sm" v-model.number="durationSec" min="1" max="3600" step="1" />
         </div>
       </div>
+      <div class="mt-2">
+        <label class="form-label">Propagation Environment</label>
+        <select class="form-select form-select-sm" v-model="desStore.pathLossProfileId">
+          <option v-for="profile in pathLossProfiles" :key="profile.id" :value="profile.id">
+            {{ profile.name }}
+          </option>
+        </select>
+      </div>
       <button class="btn btn-primary btn-sm w-100 mt-2" :disabled="nodesStore.nodes.length < 2" @click="onInit">
         Initialize DES ({{ nodesStore.nodes.length }} nodes)
       </button>
@@ -84,10 +92,14 @@
 import { ref, computed } from 'vue'
 import { useDesStore } from '../../stores/desStore'
 import { useNodesStore } from '../../stores/nodesStore'
-import { REGION_DEFAULTS } from '../../des/types'
+import { useSitesStore } from '../../stores/sitesStore'
+import { REGION_DEFAULTS, PATH_LOSS_PROFILES } from '../../des/types'
 
 const desStore = useDesStore()
 const nodesStore = useNodesStore()
+const sitesStore = useSitesStore()
+
+const pathLossProfiles = PATH_LOSS_PROFILES
 
 const sourceNodeId = ref('')
 const destNodeId = ref('')
@@ -112,7 +124,7 @@ function onRegionChange() {
 }
 
 function onInit() {
-  desStore.initialize()
+  desStore.initialize(undefined, sitesStore.localSites)
   // Auto-select first node as source
   if (nodesStore.nodes.length > 0) {
     sourceNodeId.value = nodesStore.nodes[0].id

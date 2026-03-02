@@ -4,6 +4,8 @@ export interface Site {
   taskId: string
   raster: any
   rasterLayer?: any
+  visible: boolean
+  rasterData?: ArrayBuffer
 }
 
 export interface SplatParams {
@@ -207,10 +209,17 @@ export interface MeshNode {
   }
 
   /**
-   * Window facing azimuth in degrees (0=N, clockwise).
+   * Angular cone visible from a window installation.
+   * startDeg and endDeg are in degrees (0=North, clockwise).
    * Only meaningful when `installationType === 'window'`.
    */
-  windowAzimuth?: number
+  windowCone?: {
+    startDeg: number
+    endDeg: number
+  }
+
+  /** Terrain elevation above mean sea level in metres (from Open-Meteo API) */
+  elevationM?: number
 
   /** Estimated obstruction level at the site */
   obstructionLevel: ObstructionLevel

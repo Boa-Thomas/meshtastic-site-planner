@@ -16,72 +16,7 @@
           </div>
           <div class="offcanvas-body">
             <ul class="navbar-nav">
-              <!-- 1. Site / Transmitter -->
-              <li class="nav-item">
-                <a class="nav-link dropdown-toggle" href="#" role="button"
-                   @click.prevent="togglePanel('transmitter')"
-                   :aria-expanded="openPanels.has('transmitter')">Site / Transmitter</a>
-                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('transmitter') }]"
-                    style="position:static">
-                  <li>
-                    <Transmitter />
-                  </li>
-                </ul>
-              </li>
-
-              <!-- 2. Receiver -->
-              <li class="nav-item">
-                <a class="nav-link dropdown-toggle" href="#" role="button"
-                   @click.prevent="togglePanel('receiver')"
-                   :aria-expanded="openPanels.has('receiver')">Receiver</a>
-                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('receiver') }]"
-                    style="position:static">
-                  <li>
-                    <Receiver />
-                  </li>
-                </ul>
-              </li>
-
-              <!-- 3. Environment -->
-              <li class="nav-item">
-                <a class="nav-link dropdown-toggle" href="#" role="button"
-                   @click.prevent="togglePanel('environment')"
-                   :aria-expanded="openPanels.has('environment')">Environment</a>
-                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('environment') }]"
-                    style="position:static">
-                  <li>
-                    <Environment />
-                  </li>
-                </ul>
-              </li>
-
-              <!-- 4. Simulation Options -->
-              <li class="nav-item">
-                <a class="nav-link dropdown-toggle" href="#" role="button"
-                   @click.prevent="togglePanel('simulation')"
-                   :aria-expanded="openPanels.has('simulation')">Simulation Options</a>
-                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('simulation') }]"
-                    style="position:static">
-                  <li>
-                    <Simulation />
-                  </li>
-                </ul>
-              </li>
-
-              <!-- 5. Display -->
-              <li class="nav-item">
-                <a class="nav-link dropdown-toggle" href="#" role="button"
-                   @click.prevent="togglePanel('display')"
-                   :aria-expanded="openPanels.has('display')">Display</a>
-                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('display') }]"
-                    style="position:static">
-                  <li>
-                    <Display />
-                  </li>
-                </ul>
-              </li>
-
-              <!-- 6. Mesh Nodes -->
+              <!-- 1. Mesh Nodes -->
               <li class="nav-item">
                 <a class="nav-link dropdown-toggle" href="#" role="button"
                    @click.prevent="togglePanel('meshNodes')"
@@ -102,6 +37,12 @@
                     <!-- Node list -->
                     <NodeList />
 
+                    <!-- Settings stale alert -->
+                    <div v-if="settingsStale" class="alert alert-warning alert-dismissible py-1 px-2 small mt-2">
+                      Settings changed since last coverage run. Rerun coverage to update results.
+                      <button type="button" class="btn-close btn-sm" @click="settingsStale = false" aria-label="Close"></button>
+                    </div>
+
                     <!-- Run All Coverage button -->
                     <button
                       v-if="nodesStore.nodes.length > 0"
@@ -112,6 +53,36 @@
                       <span v-if="runAllState === 'running'" class="spinner-border spinner-border-sm me-1"></span>
                       {{ runAllState === 'running' ? `Coverage ${runAllProgress.current}/${runAllProgress.total}...` : 'Run All Coverage' }}
                     </button>
+
+                    <!-- Coverage overlays list -->
+                    <div v-if="sitesStore.localSites.length > 0" class="mt-2">
+                      <div class="d-flex gap-1 mb-2">
+                        <button class="btn btn-outline-light btn-sm flex-fill" @click="sitesStore.hideAllOverlays()">
+                          Hide All
+                        </button>
+                        <button class="btn btn-outline-light btn-sm flex-fill" @click="sitesStore.showAllOverlays()">
+                          Show All
+                        </button>
+                        <button class="btn btn-outline-danger btn-sm flex-fill" @click="onResetAllCoverage">
+                          Reset All
+                        </button>
+                      </div>
+                      <ul class="list-group">
+                        <li class="list-group-item d-flex justify-content-between align-items-center py-1 px-2"
+                            v-for="(site, index) in sitesStore.localSites" :key="site.taskId"
+                            :style="{ opacity: site.visible ? 1 : 0.5 }">
+                          <button class="btn btn-sm p-0 me-2"
+                                  :class="site.visible ? 'btn-outline-success' : 'btn-outline-secondary'"
+                                  @click="sitesStore.toggleSiteVisibility(index)"
+                                  :title="site.visible ? 'Hide overlay' : 'Show overlay'"
+                                  style="width: 24px; height: 24px; line-height: 1; font-size: 12px;">
+                            {{ site.visible ? 'V' : 'H' }}
+                          </button>
+                          <span class="flex-fill text-truncate small">{{ site.params.transmitter.name }}</span>
+                          <button type="button" @click="sitesStore.removeSite(index)" class="btn-close btn-close-white btn-sm" aria-label="Remove"></button>
+                        </li>
+                      </ul>
+                    </div>
 
                     <div v-if="runAllErrors.length > 0"
                          class="alert alert-warning alert-dismissible mt-2 py-1 px-2 small">
@@ -131,7 +102,46 @@
                 </ul>
               </li>
 
-              <!-- 7. Network Simulation (DES) -->
+              <!-- 2. Environment -->
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('environment')"
+                   :aria-expanded="openPanels.has('environment')">Environment</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('environment') }]"
+                    style="position:static">
+                  <li>
+                    <Environment />
+                  </li>
+                </ul>
+              </li>
+
+              <!-- 3. Simulation Options -->
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('simulation')"
+                   :aria-expanded="openPanels.has('simulation')">Simulation Options</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('simulation') }]"
+                    style="position:static">
+                  <li>
+                    <Simulation />
+                  </li>
+                </ul>
+              </li>
+
+              <!-- 4. Display -->
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('display')"
+                   :aria-expanded="openPanels.has('display')">Display</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('display') }]"
+                    style="position:static">
+                  <li>
+                    <Display />
+                  </li>
+                </ul>
+              </li>
+
+              <!-- 5. Network Simulation (DES) -->
               <li class="nav-item">
                 <a class="nav-link dropdown-toggle" href="#" role="button"
                    @click.prevent="togglePanel('des')"
@@ -149,16 +159,21 @@
               </li>
             </ul>
 
-            <!-- Run Simulation + Export buttons -->
-            <div class="mt-3 d-flex gap-2">
-              <button :disabled="sitesStore.simulationState === 'running'" @click="sitesStore.runSimulation" type="button" class="btn btn-success btn-sm" id="runSimulation">
-                <span :class="{ 'd-none': sitesStore.simulationState !== 'running' }" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-                <span class="button-text">{{ buttonText() }}</span>
-              </button>
+            <!-- Project & Export buttons -->
+            <div class="mt-3 d-flex flex-wrap gap-2">
               <button :disabled="exportLoading" @click="exportMap" type="button" class="btn btn-secondary btn-sm">
                 <span :class="{ 'd-none': !exportLoading }" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
                 Export PDF
               </button>
+              <button @click="exportProject" :disabled="exporting" type="button" class="btn btn-outline-light btn-sm">
+                <span v-if="exporting" class="spinner-border spinner-border-sm me-1"></span>
+                Export Project
+              </button>
+              <label class="btn btn-outline-light btn-sm mb-0" :class="{ disabled: importing }">
+                <span v-if="importing" class="spinner-border spinner-border-sm me-1"></span>
+                Import Project
+                <input type="file" accept=".json" class="d-none" @change="onImportFile" :disabled="importing">
+              </label>
             </div>
 
             <div v-if="exportError" class="alert alert-warning alert-dismissible mt-2 py-1 px-2 small" role="alert">
@@ -166,13 +181,16 @@
               <button type="button" class="btn-close btn-sm" @click="exportError = ''" aria-label="Close"></button>
             </div>
 
-            <!-- Legacy site list (SPLAT! results from the main transmitter panel) -->
-            <ul class="list-group mt-3">
-              <li class="list-group-item d-flex justify-content-between align-items-center" v-for="(site, index) in sitesStore.localSites" :key="site.taskId">
-                <span>{{ site.params.transmitter.name }}</span>
-                <button type="button" @click="sitesStore.removeSite(index)" class="btn-close" aria-label="Close"></button>
-              </li>
-            </ul>
+            <div v-if="projectExportError" class="alert alert-warning alert-dismissible mt-2 py-1 px-2 small" role="alert">
+              {{ projectExportError }}
+              <button type="button" class="btn-close btn-sm" @click="projectExportError = ''" aria-label="Close"></button>
+            </div>
+
+            <div v-if="importError" class="alert alert-warning alert-dismissible mt-2 py-1 px-2 small" role="alert">
+              {{ importError }}
+              <button type="button" class="btn-close btn-sm" @click="importError = ''" aria-label="Close"></button>
+            </div>
+
           </div>
         </div>
       </div>
@@ -187,11 +205,9 @@ import "leaflet/dist/leaflet.css"
 import "bootstrap/dist/css/bootstrap.min.css"
 import "bootstrap/dist/js/bootstrap.bundle.min.js"
 import L from 'leaflet'
-import { markRaw, ref, watch } from 'vue'
+import { computed, markRaw, onMounted, onUnmounted, ref, watch } from 'vue'
 import { reactive } from 'vue'
 
-import Transmitter from "./components/Transmitter.vue"
-import Receiver from "./components/Receiver.vue"
 import Environment from "./components/Environment.vue"
 import Simulation from "./components/Simulation.vue"
 import Display from "./components/Display.vue"
@@ -207,17 +223,145 @@ import { useSitesStore } from './stores/sitesStore'
 import { useMapStore } from './stores/mapStore'
 import { useNodesStore } from './stores/nodesStore'
 import { useExport } from './composables/useExport'
+import { useProjectIO } from './composables/useProjectIO'
 import { useDesVisualization } from './composables/useDesVisualization'
 import { meshNodeMarker } from './layers'
 import { nodeToSplatParams } from './utils/nodeToSplatParams'
-import { cloneObject } from './utils'
-import parseGeoraster from 'georaster'
+import type { MeshNode } from './types/index'
 
 const sitesStore = useSitesStore()
 const mapStore = useMapStore()
 const nodesStore = useNodesStore()
 const { exportLoading, exportError, exportMap } = useExport()
+const { exportProject, importProject, importing, importError, exporting, exportError: projectExportError } = useProjectIO()
 useDesVisualization()
+
+async function onImportFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  await importProject(file)
+  input.value = ''
+}
+
+// --- Window cone overlay ---
+
+let coneLayer: L.Polygon | null = null
+
+function destPoint(lat: number, lon: number, bearingDeg: number, distKm: number): [number, number] {
+  const bearingRad = (bearingDeg * Math.PI) / 180
+  const dLat = (distKm * Math.cos(bearingRad)) / 111.32
+  const dLon = (distKm * Math.sin(bearingRad)) / (111.32 * Math.cos((lat * Math.PI) / 180))
+  return [lat + dLat, lon + dLon]
+}
+
+function computeConePoints(
+  lat: number, lon: number,
+  startDeg: number, endDeg: number,
+  radiusKm: number,
+): [number, number][] {
+  const norm = (v: number) => ((v % 360) + 360) % 360
+  const s = norm(startDeg)
+  const e = norm(endDeg)
+
+  // Zero-width cone — nothing to render
+  if (s === e) return []
+
+  const arcPoints: [number, number][] = []
+  const step = 3
+  if (e > s) {
+    for (let a = s; a < e; a += step) {
+      arcPoints.push(destPoint(lat, lon, a, radiusKm))
+    }
+    arcPoints.push(destPoint(lat, lon, e, radiusKm))
+  } else {
+    // Wrap-around (e.g. 270° → 90° passing through North)
+    for (let a = s; a < 360; a += step) {
+      arcPoints.push(destPoint(lat, lon, a, radiusKm))
+    }
+    for (let a = 0; a < e; a += step) {
+      arcPoints.push(destPoint(lat, lon, a, radiusKm))
+    }
+    arcPoints.push(destPoint(lat, lon, e, radiusKm))
+  }
+  return [[lat, lon], ...arcPoints]
+}
+
+function updateConeOverlay() {
+  if (coneLayer) {
+    coneLayer.remove()
+    coneLayer = null
+  }
+
+  const map = mapStore.map
+  if (!map) return
+
+  const node = nodesStore.selectedNode
+  if (
+    !node ||
+    node.installationType !== 'window' ||
+    !node.windowCone
+  ) return
+
+  const points = computeConePoints(
+    node.lat, node.lon,
+    node.windowCone.startDeg, node.windowCone.endDeg,
+    0.3, // 300 meters
+  )
+
+  coneLayer = markRaw(
+    L.polygon(points, {
+      color: '#3b82f6',
+      weight: 2,
+      opacity: 0.6,
+      fillColor: '#3b82f6',
+      fillOpacity: 0.15,
+      interactive: false,
+    }).addTo(map as L.Map)
+  )
+}
+
+const coneWatchSource = computed(() => {
+  const node = nodesStore.selectedNode
+  if (!node) return null
+  return {
+    id: node.id,
+    lat: node.lat,
+    lon: node.lon,
+    installationType: node.installationType,
+    windowCone: node.windowCone,
+  }
+})
+
+watch(coneWatchSource, updateConeOverlay, { deep: true })
+
+onUnmounted(() => {
+  if (coneLayer) {
+    coneLayer.remove()
+    coneLayer = null
+  }
+})
+
+// Initialize the map (moved from Transmitter.vue)
+onMounted(() => {
+  const mapEl = document.getElementById('map') as HTMLElement
+  let center: [number, number] = [-26.82, -49.27]
+  if (nodesStore.nodes.length > 0) {
+    const lats = nodesStore.nodes.map(n => n.lat)
+    const lons = nodesStore.nodes.map(n => n.lon)
+    center = [
+      lats.reduce((a, b) => a + b, 0) / lats.length,
+      lons.reduce((a, b) => a + b, 0) / lons.length,
+    ]
+  }
+  mapStore.initMap(mapEl, center)
+  if (nodesStore.nodes.length > 0 && mapStore.map) {
+    const bounds = L.latLngBounds(
+      nodesStore.nodes.map(n => [n.lat, n.lon] as [number, number])
+    )
+    mapStore.map.fitBounds(bounds.pad(0.2))
+  }
+})
 
 // Track Leaflet markers for each mesh node by node ID
 const nodeMarkers = new Map<string, L.Marker>()
@@ -227,21 +371,75 @@ const runAllState = ref<'idle' | 'running'>('idle')
 const runAllProgress = ref({ current: 0, total: 0 })
 const runAllErrors = ref<string[]>([])
 
-const buttonText = () => {
-  if ('running' === sitesStore.simulationState) {
-    return 'Running'
-  } else if ('failed' === sitesStore.simulationState) {
-    return 'Failed'
-  } else {
-    return 'Run Simulation'
-  }
-}
+// Settings stale detection (only for RF-affecting params, not display)
+const settingsStale = ref(false)
+let skipInitialWatch = true
+watch(
+  () => ({
+    env: sitesStore.splatParams.environment,
+    sim: sitesStore.splatParams.simulation,
+  }),
+  () => {
+    if (skipInitialWatch) {
+      skipInitialWatch = false
+      return
+    }
+    if (sitesStore.localSites.length > 0) {
+      settingsStale.value = true
+    }
+  },
+  { deep: true }
+)
 
-// Which panels are currently expanded (transmitter + display open by default)
-const openPanels = reactive(new Set(['transmitter', 'display']))
+// Instant redraw when display settings change (colormap, min/max dBm, transparency)
+watch(
+  () => sitesStore.splatParams.display,
+  () => {
+    if (sitesStore.localSites.length > 0) {
+      sitesStore.redrawSites(true)
+    }
+  },
+  { deep: true }
+)
+
+// Which panels are currently expanded (meshNodes + display open by default)
+const openPanels = reactive(new Set(['meshNodes', 'display']))
 const togglePanel = (name: string) => {
   openPanels.has(name) ? openPanels.delete(name) : openPanels.add(name)
 }
+
+// --- Helper to create a draggable node marker ---
+
+function createNodeMarker(node: MeshNode, map: L.Map): L.Marker {
+  const marker = markRaw(
+    L.marker([node.lat, node.lon], { icon: meshNodeMarker, draggable: true })
+      .addTo(map)
+      .bindPopup(node.name)
+  )
+  marker.on('click', () => { nodesStore.selectedNodeId = node.id })
+  marker.on('dragend', () => {
+    const pos = marker.getLatLng()
+    const lat = parseFloat(pos.lat.toFixed(6))
+    const lon = parseFloat(((((pos.lng + 180) % 360) + 360) % 360 - 180).toFixed(6))
+    nodesStore.updateNode(node.id, { lat, lon })
+  })
+  nodeMarkers.set(node.id, marker)
+  return marker
+}
+
+// --- Cleanup markers when nodes are removed ---
+
+watch(
+  () => new Set(nodesStore.nodes.map(n => n.id)),
+  (currentIds) => {
+    for (const [id, marker] of nodeMarkers) {
+      if (!currentIds.has(id)) {
+        marker.remove()
+        nodeMarkers.delete(id)
+      }
+    }
+  },
+)
 
 // --- Sync marker popups when node names change ---
 
@@ -258,23 +456,33 @@ watch(
   { deep: true }
 )
 
+// --- Sync marker positions when lat/lon change via form ---
+
+watch(
+  () => nodesStore.nodes.map(n => ({ id: n.id, lat: n.lat, lon: n.lon })),
+  (nodePositions) => {
+    for (const { id, lat, lon } of nodePositions) {
+      const marker = nodeMarkers.get(id)
+      if (marker) {
+        const current = marker.getLatLng()
+        if (Math.abs(current.lat - lat) > 0.000001 || Math.abs(current.lng - lon) > 0.000001) {
+          marker.setLatLng([lat, lon])
+        }
+      }
+    }
+  },
+  { deep: true }
+)
+
 // --- Restore markers for persisted nodes after map init ---
 
 watch(
-  () => mapStore.map,
-  (map) => {
+  () => [mapStore.map, nodesStore.nodes.length] as const,
+  ([map]) => {
     if (!map) return
     for (const node of nodesStore.nodes) {
       if (nodeMarkers.has(node.id)) continue
-      const marker = markRaw(
-        L.marker([node.lat, node.lon], { icon: meshNodeMarker })
-          .addTo(map as L.Map)
-          .bindPopup(node.name)
-      )
-      marker.on('click', () => {
-        nodesStore.selectedNodeId = node.id
-      })
-      nodeMarkers.set(node.id, marker)
+      createNodeMarker(node, map as L.Map)
     }
   },
   { immediate: true }
@@ -310,17 +518,9 @@ function onMapClickForNode(e: L.LeafletMouseEvent) {
   const node = nodesStore.createDefaultNode(lat, lon, `Node ${nodeCount}`)
   nodesStore.addNode(node)
 
-  // Place a marker on the map for this node
+  // Place a draggable marker on the map for this node
   if (mapStore.map) {
-    const marker = markRaw(
-      L.marker([lat, lon], { icon: meshNodeMarker })
-        .addTo(mapStore.map as L.Map)
-        .bindPopup(node.name)
-    )
-    marker.on('click', () => {
-      nodesStore.selectedNodeId = node.id
-    })
-    nodeMarkers.set(node.id, marker)
+    createNodeMarker(node, mapStore.map as L.Map)
   }
 
   nodesStore.stopPlacingNode()
@@ -336,6 +536,46 @@ function onMapClickForNode(e: L.LeafletMouseEvent) {
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/** Wait for a backend task to complete via SSE, with polling fallback. */
+function waitForTaskCompletion(taskId: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      const es = new EventSource(`/events/${taskId}`)
+      es.onmessage = (event) => {
+        const data = JSON.parse(event.data)
+        if (data.status === 'completed') {
+          es.close()
+          resolve()
+        } else if (data.status === 'failed' || data.status === 'not_found') {
+          es.close()
+          reject(new Error(`SPLAT! simulation ${data.status}`))
+        }
+      }
+      es.onerror = () => {
+        es.close()
+        console.warn('[SSE] Connection failed, falling back to polling')
+        pollForCompletion(taskId).then(resolve, reject)
+      }
+    } catch {
+      // EventSource not supported — fall back to polling
+      pollForCompletion(taskId).then(resolve, reject)
+    }
+  })
+}
+
+async function pollForCompletion(taskId: string): Promise<void> {
+  while (true) {
+    await sleep(1000)
+    const statusResponse = await fetch(`/status/${taskId}`)
+    if (!statusResponse.ok) {
+      throw new Error(`Status check failed (${statusResponse.status})`)
+    }
+    const { status } = await statusResponse.json()
+    if (status === 'completed') return
+    if (status === 'failed') throw new Error('SPLAT! simulation failed on backend')
+  }
 }
 
 async function onRunNodeCoverage(nodeId: string): Promise<void> {
@@ -382,9 +622,6 @@ async function onRunNodeCoverage(nodeId: string): Promise<void> {
       situation_fraction: splatParams.simulation.situation_fraction,
       time_fraction: splatParams.simulation.time_fraction,
       high_resolution: splatParams.simulation.high_resolution,
-      colormap: splatParams.display.color_scale,
-      min_dbm: splatParams.display.min_dbm,
-      max_dbm: splatParams.display.max_dbm,
     }
 
     console.log(`[NodeCoverage] POST /predict for "${node.name}"`)
@@ -401,68 +638,65 @@ async function onRunNodeCoverage(nodeId: string): Promise<void> {
     const { task_id: taskId } = await predictResponse.json()
     console.log(`[NodeCoverage] Task ${taskId} started for "${node.name}"`)
 
-    // Await-based polling loop
-    while (true) {
-      await sleep(1000)
+    // Wait for completion via SSE (with polling fallback)
+    await waitForTaskCompletion(taskId)
 
-      const statusResponse = await fetch(`/status/${taskId}`)
-      if (!statusResponse.ok) {
-        throw new Error(`Status check failed (${statusResponse.status})`)
-      }
-      const { status } = await statusResponse.json()
-
-      if (status === 'completed') {
-        const resultResponse = await fetch(`/result/${taskId}`)
-        if (!resultResponse.ok) {
-          throw new Error(`Result fetch failed (${resultResponse.status})`)
-        }
-
-        const arrayBuffer = await resultResponse.arrayBuffer()
-        const geoRaster = await parseGeoraster(arrayBuffer)
-
-        sitesStore.localSites.push({
-          params: cloneObject(splatParams),
-          taskId,
-          raster: geoRaster,
-        })
-        sitesStore.redrawSites()
-        nodesStore.updateNode(nodeId, { siteId: taskId })
-        console.log(`[NodeCoverage] Completed for "${node.name}"`)
-        return
-      } else if (status === 'failed') {
-        throw new Error('SPLAT! simulation failed on backend')
-      }
+    const resultResponse = await fetch(`/result/${taskId}`)
+    if (!resultResponse.ok) {
+      throw new Error(`Result fetch failed (${resultResponse.status})`)
     }
+
+    const arrayBuffer = await resultResponse.arrayBuffer()
+    await sitesStore.addSiteFromBuffer(taskId, arrayBuffer, splatParams)
+    nodesStore.updateNode(nodeId, { siteId: taskId })
+    console.log(`[NodeCoverage] Completed for "${node.name}"`)
   } catch (err) {
     console.error(`[NodeCoverage] Error for node ${nodeId}:`, err)
     throw err // Re-throw so onRunAllCoverage can catch it
   }
 }
 
+// --- Reset All Coverage ---
+
+function onResetAllCoverage() {
+  sitesStore.removeAllSites()
+  nodesStore.clearAllSiteIds()
+}
+
 // --- Run All Coverage ---
 
 async function onRunAllCoverage() {
   runAllErrors.value = []
-  // Snapshot IDs as plain strings — decoupled from Pinia reactivity
   const nodeIds = nodesStore.nodes.map(n => n.id)
   if (nodeIds.length === 0) return
 
   runAllState.value = 'running'
   runAllProgress.value = { current: 0, total: nodeIds.length }
 
+  const BATCH_SIZE = 2 // Safe with rate limit 5/min since each run takes >30s
+
   try {
-    for (const nodeId of nodeIds) {
-      runAllProgress.value.current++
-      try {
-        await onRunNodeCoverage(nodeId)
-      } catch (err) {
-        const name = nodesStore.nodeById(nodeId)?.name ?? nodeId
-        runAllErrors.value.push(`"${name}": ${err instanceof Error ? err.message : String(err)}`)
-        // Continue to next node
+    for (let i = 0; i < nodeIds.length; i += BATCH_SIZE) {
+      const batch = nodeIds.slice(i, i + BATCH_SIZE)
+      const results = await Promise.allSettled(
+        batch.map(async (nodeId) => {
+          await onRunNodeCoverage(nodeId)
+          runAllProgress.value.current++
+        })
+      )
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          const batchIndex = results.indexOf(result)
+          const failedId = batch[batchIndex]
+          const name = nodesStore.nodeById(failedId)?.name ?? failedId
+          const err = result.reason
+          runAllErrors.value.push(`"${name}": ${err instanceof Error ? err.message : String(err)}`)
+        }
       }
     }
   } finally {
-    runAllState.value = 'idle' // ALWAYS reset, even if everything fails
+    runAllState.value = 'idle'
+    settingsStale.value = false
   }
 }
 </script>

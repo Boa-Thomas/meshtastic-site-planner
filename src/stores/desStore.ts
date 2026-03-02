@@ -1,13 +1,41 @@
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import { SimulationEngine, createDefaultConfig } from '../des'
-import type { SimEvent, SimulationConfig, SimulationMetrics, LinkInfo } from '../des'
+import type { SimEvent, SimulationConfig, SimulationMetrics, LinkInfo, RssiOverrideMap } from '../des'
 import { createEmptyMetrics } from '../des'
-import type { MeshNode, ChannelPreset } from '../types/index'
+import { PATH_LOSS_PROFILES } from '../des/types'
+import type { PathLossProfileId } from '../des/types'
+import type { MeshNode, ChannelPreset, Site } from '../types/index'
 import { channelPresets } from '../data/channelPresets'
 import { useNodesStore } from './nodesStore'
+import { lookupRasterRssi } from '../utils/rasterLookup'
 
 export type DesStatus = 'idle' | 'running' | 'paused' | 'completed'
+
+/**
+ * Build an RSSI override map from SPLAT! raster data.
+ * For each TX node that has a coverage raster (via siteId), lookup the RSSI
+ * at every other node's position and add it to the override map.
+ */
+function buildRssiOverrideMap(nodes: MeshNode[], sites: Site[]): RssiOverrideMap {
+  const overrides: RssiOverrideMap = new Map()
+  for (const txNode of nodes) {
+    if (!txNode.siteId) continue
+    const site = sites.find((s) => s.taskId === txNode.siteId)
+    if (!site || !site.raster) continue
+
+    const display = site.params.display
+
+    for (const rxNode of nodes) {
+      if (rxNode.id === txNode.id) continue
+      const rssi = lookupRasterRssi(site.raster, display, rxNode.lat, rxNode.lon)
+      if (rssi !== null) {
+        overrides.set(`${txNode.id}->${rxNode.id}`, rssi)
+      }
+    }
+  }
+  return overrides
+}
 
 export const useDesStore = defineStore('des', {
   state: () => ({
@@ -17,6 +45,7 @@ export const useDesStore = defineStore('des', {
     currentEventIndex: -1,
     metrics: createEmptyMetrics() as SimulationMetrics,
     config: createDefaultConfig() as SimulationConfig,
+    pathLossProfileId: 'forest_mountain' as PathLossProfileId,
     playbackSpeed: 1,    // 1 = real-time, 2 = 2x, 0.5 = half speed, etc.
     animationTimerId: null as number | null,
     links: [] as LinkInfo[],
@@ -39,7 +68,7 @@ export const useDesStore = defineStore('des', {
      * Initialize the DES engine with the current nodes and config.
      * Must be called before any simulation actions.
      */
-    initialize(channelPresetOverride?: ChannelPreset) {
+    initialize(channelPresetOverride?: ChannelPreset, sites?: Site[]) {
       const nodesStore = useNodesStore()
       if (nodesStore.nodes.length < 2) return
 
@@ -49,11 +78,24 @@ export const useDesStore = defineStore('des', {
         ?? channelPresets.find(p => p.id === firstNode.channelPresetId)
         ?? channelPresets[0]
 
+      // Apply selected path loss profile to the simulation config
+      const profile = PATH_LOSS_PROFILES.find(p => p.id === this.pathLossProfileId)
+      if (profile) {
+        this.config.pathLossConfig = profile.config
+      }
+
+      // Build RSSI overrides from SPLAT! raster data (if available)
+      const rssiOverrides = buildRssiOverrideMap(
+        nodesStore.nodes as MeshNode[],
+        sites ?? [],
+      )
+
       // Create engine with markRaw to avoid Vue proxy wrapping (performance)
       this.engine = markRaw(new SimulationEngine(
         nodesStore.nodes as MeshNode[],
         preset,
         this.config,
+        rssiOverrides,
       ))
 
       // Compute links for visualization
@@ -164,6 +206,14 @@ export const useDesStore = defineStore('des', {
      */
     updateConfig(updates: Partial<SimulationConfig>) {
       Object.assign(this.config, updates)
+      // Sync pathLossProfileId from imported pathLossConfig
+      if (updates.pathLossConfig) {
+        const match = PATH_LOSS_PROFILES.find(
+          p => p.config.pathLossExponent === updates.pathLossConfig!.pathLossExponent
+            && p.config.breakpointKm === updates.pathLossConfig!.breakpointKm,
+        )
+        if (match) this.pathLossProfileId = match.id
+      }
     },
   },
 })
