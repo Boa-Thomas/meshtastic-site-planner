@@ -3,65 +3,65 @@
     <h6 class="text-light mb-2">Metrics</h6>
     <div class="row g-1 small">
       <div class="col-6">
-        <div class="card bg-dark border-secondary">
+        <div class="card text-bg-dark border-secondary">
           <div class="card-body py-1 px-2">
-            <div class="text-muted">Delivery Ratio</div>
+            <div class="text-white-50">Delivery Ratio</div>
             <div class="fw-bold">{{ (metrics.deliveryRatio * 100).toFixed(1) }}%</div>
           </div>
         </div>
       </div>
       <div class="col-6">
-        <div class="card bg-dark border-secondary">
+        <div class="card text-bg-dark border-secondary">
           <div class="card-body py-1 px-2">
-            <div class="text-muted">Avg Latency</div>
+            <div class="text-white-50">Avg Latency</div>
             <div class="fw-bold">{{ metrics.averageLatencyMs.toFixed(0) }} ms</div>
           </div>
         </div>
       </div>
       <div class="col-6">
-        <div class="card bg-dark border-secondary">
+        <div class="card text-bg-dark border-secondary">
           <div class="card-body py-1 px-2">
-            <div class="text-muted">Max Latency</div>
+            <div class="text-white-50">Max Latency</div>
             <div class="fw-bold">{{ metrics.maxLatencyMs.toFixed(0) }} ms</div>
           </div>
         </div>
       </div>
       <div class="col-6">
-        <div class="card bg-dark border-secondary">
+        <div class="card text-bg-dark border-secondary">
           <div class="card-body py-1 px-2">
-            <div class="text-muted">Avg Hops</div>
+            <div class="text-white-50">Avg Hops</div>
             <div class="fw-bold">{{ metrics.averageHopCount.toFixed(1) }}</div>
           </div>
         </div>
       </div>
       <div class="col-6">
-        <div class="card bg-dark border-secondary">
+        <div class="card text-bg-dark border-secondary">
           <div class="card-body py-1 px-2">
-            <div class="text-muted">Collisions</div>
+            <div class="text-white-50">Collisions</div>
             <div class="fw-bold">{{ metrics.totalCollisions }}</div>
           </div>
         </div>
       </div>
       <div class="col-6">
-        <div class="card bg-dark border-secondary">
+        <div class="card text-bg-dark border-secondary">
           <div class="card-body py-1 px-2">
-            <div class="text-muted">Messages</div>
+            <div class="text-white-50">Messages</div>
             <div class="fw-bold">{{ metrics.totalMessagesDelivered }}/{{ metrics.totalMessagesSent }}</div>
           </div>
         </div>
       </div>
       <div class="col-6">
-        <div class="card bg-dark border-secondary">
+        <div class="card text-bg-dark border-secondary">
           <div class="card-body py-1 px-2">
-            <div class="text-muted">Avg RSSI</div>
+            <div class="text-white-50">Avg RSSI</div>
             <div class="fw-bold">{{ avgRssi !== null ? avgRssi.toFixed(0) + ' dBm' : 'N/A' }}</div>
           </div>
         </div>
       </div>
       <div class="col-6">
-        <div class="card bg-dark border-secondary">
+        <div class="card text-bg-dark border-secondary">
           <div class="card-body py-1 px-2">
-            <div class="text-muted">Timeouts</div>
+            <div class="text-white-50">Timeouts</div>
             <div class="fw-bold">{{ timeoutCount }}</div>
           </div>
         </div>

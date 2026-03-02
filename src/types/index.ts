@@ -206,6 +206,12 @@ export interface MeshNode {
     beamwidth: number
   }
 
+  /**
+   * Window facing azimuth in degrees (0=N, clockwise).
+   * Only meaningful when `installationType === 'window'`.
+   */
+  windowAzimuth?: number
+
   /** Estimated obstruction level at the site */
   obstructionLevel: ObstructionLevel
 

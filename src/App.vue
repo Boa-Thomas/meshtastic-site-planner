@@ -113,6 +113,16 @@
                       {{ runAllState === 'running' ? `Coverage ${runAllProgress.current}/${runAllProgress.total}...` : 'Run All Coverage' }}
                     </button>
 
+                    <div v-if="runAllErrors.length > 0"
+                         class="alert alert-warning alert-dismissible mt-2 py-1 px-2 small">
+                      <strong>{{ runAllErrors.length }} node(s) failed:</strong>
+                      <ul class="mb-0 ps-3">
+                        <li v-for="(err, i) in runAllErrors" :key="i">{{ err }}</li>
+                      </ul>
+                      <button type="button" class="btn-close btn-sm"
+                              @click="runAllErrors = []" aria-label="Close"></button>
+                    </div>
+
                     <!-- Node editor (shown when a node is selected) -->
                     <div v-if="nodesStore.selectedNode" class="mt-3 border-top border-secondary pt-3">
                       <NodeEditor @runCoverage="onRunNodeCoverage" />
@@ -131,6 +141,7 @@
                   <li>
                     <DesControls />
                     <div class="mt-3"><DesLinkOverlay /></div>
+                    <div class="mt-3"><DesTraceroute /></div>
                     <div class="mt-3"><DesMetrics /></div>
                     <div class="mt-3"><DesEventLog /></div>
                   </li>
@@ -188,6 +199,7 @@ import NodeList from "./components/NodeList.vue"
 import NodeEditor from "./components/NodeEditor.vue"
 import DesControls from "./components/des/DesControls.vue"
 import DesLinkOverlay from "./components/des/DesLinkOverlay.vue"
+import DesTraceroute from "./components/des/DesTraceroute.vue"
 import DesMetrics from "./components/des/DesMetrics.vue"
 import DesEventLog from "./components/des/DesEventLog.vue"
 
@@ -213,6 +225,7 @@ const nodeMarkers = new Map<string, L.Marker>()
 // Run All Coverage state
 const runAllState = ref<'idle' | 'running'>('idle')
 const runAllProgress = ref({ current: 0, total: 0 })
+const runAllErrors = ref<string[]>([])
 
 const buttonText = () => {
   if ('running' === sitesStore.simulationState) {
@@ -327,37 +340,54 @@ function sleep(ms: number) {
 
 async function onRunNodeCoverage(nodeId: string): Promise<void> {
   const node = nodesStore.nodeById(nodeId)
-  if (!node) return
-
-  const splatParams = nodeToSplatParams(node)
-
-  const payload = {
-    lat: splatParams.transmitter.tx_lat,
-    lon: splatParams.transmitter.tx_lon,
-    tx_height: splatParams.transmitter.tx_height,
-    tx_power: 10 * Math.log10(splatParams.transmitter.tx_power) + 30,
-    tx_gain: splatParams.transmitter.tx_gain,
-    frequency_mhz: splatParams.transmitter.tx_freq,
-    rx_height: splatParams.receiver.rx_height,
-    rx_gain: splatParams.receiver.rx_gain,
-    signal_threshold: splatParams.receiver.rx_sensitivity,
-    system_loss: splatParams.receiver.rx_loss,
-    clutter_height: splatParams.environment.clutter_height,
-    ground_dielectric: splatParams.environment.ground_dielectric,
-    ground_conductivity: splatParams.environment.ground_conductivity,
-    atmosphere_bending: splatParams.environment.atmosphere_bending,
-    radio_climate: splatParams.environment.radio_climate,
-    polarization: splatParams.environment.polarization,
-    radius: splatParams.simulation.simulation_extent * 1000,
-    situation_fraction: splatParams.simulation.situation_fraction,
-    time_fraction: splatParams.simulation.time_fraction,
-    high_resolution: splatParams.simulation.high_resolution,
-    colormap: splatParams.display.color_scale,
-    min_dbm: splatParams.display.min_dbm,
-    max_dbm: splatParams.display.max_dbm,
+  if (!node) {
+    console.warn(`[NodeCoverage] Node not found: ${nodeId}`)
+    return
   }
 
   try {
+    // Cleanup inside try so exceptions don't kill the caller
+    if (node.siteId) {
+      const oldIndex = sitesStore.localSites.findIndex(s => s.taskId === node.siteId)
+      if (oldIndex >= 0) {
+        sitesStore.removeSite(oldIndex)
+      }
+      nodesStore.updateNode(nodeId, { siteId: undefined })
+    }
+
+    const splatParams = nodeToSplatParams(node, {
+      environment: sitesStore.splatParams.environment,
+      simulation: sitesStore.splatParams.simulation,
+      display: sitesStore.splatParams.display,
+    })
+
+    const payload = {
+      lat: splatParams.transmitter.tx_lat,
+      lon: splatParams.transmitter.tx_lon,
+      tx_height: splatParams.transmitter.tx_height,
+      tx_power: 10 * Math.log10(splatParams.transmitter.tx_power) + 30,
+      tx_gain: splatParams.transmitter.tx_gain,
+      frequency_mhz: splatParams.transmitter.tx_freq,
+      rx_height: splatParams.receiver.rx_height,
+      rx_gain: splatParams.receiver.rx_gain,
+      signal_threshold: splatParams.receiver.rx_sensitivity,
+      system_loss: splatParams.receiver.rx_loss,
+      clutter_height: splatParams.environment.clutter_height,
+      ground_dielectric: splatParams.environment.ground_dielectric,
+      ground_conductivity: splatParams.environment.ground_conductivity,
+      atmosphere_bending: splatParams.environment.atmosphere_bending,
+      radio_climate: splatParams.environment.radio_climate,
+      polarization: splatParams.environment.polarization,
+      radius: splatParams.simulation.simulation_extent * 1000,
+      situation_fraction: splatParams.simulation.situation_fraction,
+      time_fraction: splatParams.simulation.time_fraction,
+      high_resolution: splatParams.simulation.high_resolution,
+      colormap: splatParams.display.color_scale,
+      min_dbm: splatParams.display.min_dbm,
+      max_dbm: splatParams.display.max_dbm,
+    }
+
+    console.log(`[NodeCoverage] POST /predict for "${node.name}"`)
     const predictResponse = await fetch('/predict', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -365,23 +395,27 @@ async function onRunNodeCoverage(nodeId: string): Promise<void> {
     })
     if (!predictResponse.ok) {
       const detail = await predictResponse.text()
-      console.error('Node coverage prediction failed:', detail)
-      return
+      throw new Error(`Prediction failed (${predictResponse.status}): ${detail}`)
     }
 
     const { task_id: taskId } = await predictResponse.json()
+    console.log(`[NodeCoverage] Task ${taskId} started for "${node.name}"`)
 
     // Await-based polling loop
     while (true) {
       await sleep(1000)
 
       const statusResponse = await fetch(`/status/${taskId}`)
-      if (!statusResponse.ok) return
+      if (!statusResponse.ok) {
+        throw new Error(`Status check failed (${statusResponse.status})`)
+      }
       const { status } = await statusResponse.json()
 
       if (status === 'completed') {
         const resultResponse = await fetch(`/result/${taskId}`)
-        if (!resultResponse.ok) return
+        if (!resultResponse.ok) {
+          throw new Error(`Result fetch failed (${resultResponse.status})`)
+        }
 
         const arrayBuffer = await resultResponse.arrayBuffer()
         const geoRaster = await parseGeoraster(arrayBuffer)
@@ -393,32 +427,43 @@ async function onRunNodeCoverage(nodeId: string): Promise<void> {
         })
         sitesStore.redrawSites()
         nodesStore.updateNode(nodeId, { siteId: taskId })
+        console.log(`[NodeCoverage] Completed for "${node.name}"`)
         return
       } else if (status === 'failed') {
-        console.error('Node coverage simulation failed for', nodeId)
-        return
+        throw new Error('SPLAT! simulation failed on backend')
       }
     }
   } catch (err) {
-    console.error('Error running node coverage:', err)
+    console.error(`[NodeCoverage] Error for node ${nodeId}:`, err)
+    throw err // Re-throw so onRunAllCoverage can catch it
   }
 }
 
 // --- Run All Coverage ---
 
 async function onRunAllCoverage() {
-  const pending = nodesStore.nodes.filter(n => !n.siteId)
-  if (pending.length === 0) return
+  runAllErrors.value = []
+  // Snapshot IDs as plain strings — decoupled from Pinia reactivity
+  const nodeIds = nodesStore.nodes.map(n => n.id)
+  if (nodeIds.length === 0) return
 
   runAllState.value = 'running'
-  runAllProgress.value = { current: 0, total: pending.length }
+  runAllProgress.value = { current: 0, total: nodeIds.length }
 
-  for (const node of pending) {
-    runAllProgress.value.current++
-    await onRunNodeCoverage(node.id)
+  try {
+    for (const nodeId of nodeIds) {
+      runAllProgress.value.current++
+      try {
+        await onRunNodeCoverage(nodeId)
+      } catch (err) {
+        const name = nodesStore.nodeById(nodeId)?.name ?? nodeId
+        runAllErrors.value.push(`"${name}": ${err instanceof Error ? err.message : String(err)}`)
+        // Continue to next node
+      }
+    }
+  } finally {
+    runAllState.value = 'idle' // ALWAYS reset, even if everything fails
   }
-
-  runAllState.value = 'idle'
 }
 </script>
 

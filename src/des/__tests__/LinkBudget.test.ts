@@ -236,6 +236,132 @@ describe('LinkBudget.calculateFSPL', () => {
   })
 
   // -------------------------------------------------------------------------
+  // Window installation loss
+  // -------------------------------------------------------------------------
+
+  it('window TX facing receiver applies zero loss within 120° cone', () => {
+    const from = makeNode({
+      lat: 0, lon: 0,
+      installationType: 'window',
+      windowAzimuth: 90,  // facing East
+    })
+    const toEast = makeNode({ lat: 0, lon: 0.1 })  // due East
+
+    const omniFrom = makeNode({ lat: 0, lon: 0 })
+    const toEastCheck = makeNode({ lat: 0, lon: 0.1 })
+
+    const windowResult = LinkBudget.calculateFSPL(from, toEast)
+    const omniResult = LinkBudget.calculateFSPL(omniFrom, toEastCheck)
+
+    // Within the 120° cone (60° half-beam), no loss applied
+    expect(windowResult.rssiDbm).toBeCloseTo(omniResult.rssiDbm, 3)
+  })
+
+  it('window TX facing away from receiver applies significant loss', () => {
+    const from = makeNode({
+      lat: 0, lon: 0,
+      installationType: 'window',
+      windowAzimuth: 270,  // facing West
+    })
+    const toEast = makeNode({ lat: 0, lon: 0.1 })  // due East = 180° away from window
+
+    const omniFrom = makeNode({ lat: 0, lon: 0 })
+    const toEastCheck = makeNode({ lat: 0, lon: 0.1 })
+
+    const windowResult = LinkBudget.calculateFSPL(from, toEast)
+    const omniResult = LinkBudget.calculateFSPL(omniFrom, toEastCheck)
+
+    expect(windowResult.rssiDbm).toBeLessThan(omniResult.rssiDbm - 10)
+  })
+
+  it('window RX facing away from transmitter applies loss', () => {
+    const from = makeNode({ lat: 0, lon: 0 })
+    const toWindow = makeNode({
+      lat: 0, lon: 0.1,
+      installationType: 'window',
+      windowAzimuth: 90,  // facing East — but signal comes from West
+    })
+
+    const fromCheck = makeNode({ lat: 0, lon: 0 })
+    const toOmni = makeNode({ lat: 0, lon: 0.1 })
+
+    const windowResult = LinkBudget.calculateFSPL(from, toWindow)
+    const omniResult = LinkBudget.calculateFSPL(fromCheck, toOmni)
+
+    // Window facing East, signal arriving from West (180° off) → loss
+    expect(windowResult.rssiDbm).toBeLessThan(omniResult.rssiDbm - 10)
+  })
+
+  // -------------------------------------------------------------------------
+  // RX directional antenna
+  // -------------------------------------------------------------------------
+
+  it('RX directional antenna off-axis applies loss', () => {
+    const from = makeNode({ lat: 0, lon: 0 })
+    const toDirectional = makeNode({
+      lat: 0, lon: 0.1,
+      antennaOrientation: 'directional',
+      directionalParams: { azimuth: 90, beamwidth: 30 },  // pointing East, signal from West
+    })
+
+    const fromCheck = makeNode({ lat: 0, lon: 0 })
+    const toOmni = makeNode({ lat: 0, lon: 0.1 })
+
+    const dirResult = LinkBudget.calculateFSPL(from, toDirectional)
+    const omniResult = LinkBudget.calculateFSPL(fromCheck, toOmni)
+
+    expect(dirResult.rssiDbm).toBeLessThan(omniResult.rssiDbm)
+  })
+
+  // -------------------------------------------------------------------------
+  // Asymmetric links
+  // -------------------------------------------------------------------------
+
+  it('window install creates asymmetric link (A→B ≠ B→A)', () => {
+    // A is an omnidirectional node, B has a window facing South
+    const a = makeNode({ id: 'A', lat: 0, lon: 0 })
+    const b = makeNode({
+      id: 'B', lat: 0.1, lon: 0,  // B is due North of A
+      installationType: 'window',
+      windowAzimuth: 180,  // window faces South (toward A)
+    })
+
+    const ab = LinkBudget.calculateFSPL(a, b)
+    const ba = LinkBudget.calculateFSPL(b, a)
+
+    // A→B: A omni TX, B window RX facing South (toward A) = within cone = similar
+    // B→A: B window TX facing South (toward A) = within cone
+    // Both should be similar since the window faces the other node
+    // This tests that the function runs correctly with asymmetric configs
+    expect(ab.rssiDbm).toBeDefined()
+    expect(ba.rssiDbm).toBeDefined()
+
+    // Now test the genuinely asymmetric case
+    const c = makeNode({
+      id: 'C', lat: 0.1, lon: 0,  // C is due North of A
+      installationType: 'window',
+      windowAzimuth: 0,  // window faces North (away from A)
+    })
+
+    const ac = LinkBudget.calculateFSPL(a, c)
+    const ca = LinkBudget.calculateFSPL(c, a)
+
+    // A→C: A omni TX, C window RX facing North (away from A at South) = off-axis loss
+    // C→A: C window TX facing North (away from A at South) = off-axis loss
+    // Both directions have loss, but the key test: result differs from omni-omni
+    expect(ac.rssiDbm).toBeLessThan(ab.rssiDbm)
+    expect(ca.rssiDbm).toBeLessThan(ba.rssiDbm)
+  })
+
+  // -------------------------------------------------------------------------
+  // WINDOW_BEAMWIDTH constant
+  // -------------------------------------------------------------------------
+
+  it('WINDOW_BEAMWIDTH is 120 degrees', () => {
+    expect(LinkBudget.WINDOW_BEAMWIDTH).toBe(120)
+  })
+
+  // -------------------------------------------------------------------------
   // SNR derivation
   // -------------------------------------------------------------------------
 

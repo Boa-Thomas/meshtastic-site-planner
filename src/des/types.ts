@@ -31,6 +31,8 @@ export interface Packet {
   retryCount: number
   txStartTime?: number
   txEndTime?: number
+  /** Ordered list of node IDs this packet has traversed (origin, relay1, relay2, …) */
+  routePath: string[]
 }
 
 export interface LinkInfo {

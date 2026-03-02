@@ -30,14 +30,14 @@ describe('desStore', () => {
   // ---------------------------------------------------------------------------
 
   describe('initialize', () => {
-    it('sets status to idle and creates the engine when >= 2 nodes exist', () => {
+    it('sets status to paused and creates the engine when >= 2 nodes exist', () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
       addTestNodes(nodesStore)
       desStore.initialize()
 
-      expect(desStore.status).toBe('idle')
+      expect(desStore.status).toBe('paused')
       expect(desStore.engine).not.toBeNull()
     })
 

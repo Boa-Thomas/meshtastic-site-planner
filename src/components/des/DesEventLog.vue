@@ -1,6 +1,9 @@
 <template>
   <div v-if="desStore.eventCount > 0">
-    <h6 class="text-light mb-2">Event Log ({{ desStore.eventCount }})</h6>
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <h6 class="text-light mb-0">Event Log ({{ desStore.eventCount }})</h6>
+      <button class="btn btn-outline-secondary btn-sm" @click="exportCsv">Export CSV</button>
+    </div>
     <div class="des-event-log" ref="logContainer">
       <div
         v-for="(event, i) in recentEvents"
@@ -91,6 +94,40 @@ function eventBadgeClass(type: EventType): string {
     lbt_defer: 'bg-warning text-dark',
   }
   return classes[type] ?? 'bg-dark'
+}
+
+function exportCsv() {
+  const events = desStore.processedEvents
+  const header = 'event_id,time_ms,type,source_node,target_node,packet_id,hop,max_hop,payload_bytes,rssi_dbm,snr_db,is_ack,retry_count,route_path'
+  const rows = events.map(e => {
+    const src = nodeName(e.sourceNodeId)
+    const tgt = nodeName(e.targetNodeId)
+    const p = e.packet
+    return [
+      e.id,
+      e.time.toFixed(1),
+      e.type,
+      src,
+      tgt,
+      p.id.slice(0, 8),
+      p.currentHopCount,
+      p.maxHopLimit,
+      p.payloadSizeBytes,
+      p.rssiAtReceiver?.toFixed(1) ?? '',
+      p.snrAtReceiver?.toFixed(1) ?? '',
+      p.isAck,
+      p.retryCount,
+      p.routePath.map(id => nodeName(id)).join(' > '),
+    ].join(',')
+  })
+  const csv = [header, ...rows].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'des-event-log.csv'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 function eventDescription(event: SimEvent): string {

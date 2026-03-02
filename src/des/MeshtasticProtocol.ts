@@ -55,15 +55,18 @@ export class MeshtasticProtocol {
   }
 
   /**
-   * Create a copy of the packet with the hop count incremented by one.
+   * Create a copy of the packet with the hop count incremented by one
+   * and the relay node appended to the route path.
    * Does not modify the original packet.
    *
    * @param packet - packet to derive the rebroadcast from
+   * @param relayNodeId - ID of the node that is rebroadcasting
    */
-  createRebroadcast(packet: Packet): Packet {
+  createRebroadcast(packet: Packet, relayNodeId: string): Packet {
     return {
       ...packet,
       currentHopCount: packet.currentHopCount + 1,
+      routePath: [...packet.routePath, relayNodeId],
     }
   }
 
@@ -131,6 +134,7 @@ export class MeshtasticProtocol {
       payloadSizeBytes: 0,  // ACK carries no application payload
       isAck: true,
       retryCount: 0,
+      routePath: [ackSenderNodeId],
     }
   }
 

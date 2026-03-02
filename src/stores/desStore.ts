@@ -62,7 +62,7 @@ export const useDesStore = defineStore('des', {
       this.processedEvents = []
       this.currentEventIndex = -1
       this.metrics = createEmptyMetrics()
-      this.status = 'idle'
+      this.status = 'paused'
     },
 
     /**

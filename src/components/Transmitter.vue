@@ -57,11 +57,13 @@
     import * as bootstrap from 'bootstrap'
     import { useMapStore } from '../stores/mapStore'
     import { useSitesStore } from '../stores/sitesStore'
+    import { useNodesStore } from '../stores/nodesStore'
     import { onMounted } from 'vue'
     import { redPinMarker } from '../layers'
 
     const mapStore = useMapStore()
     const sitesStore = useSitesStore()
+    const nodesStore = useNodesStore()
     const transmitter = sitesStore.splatParams.transmitter
 
     const centerMapOnTransmitter = () => {
@@ -100,6 +102,12 @@
             document.getElementById('map') as HTMLElement,
             [sitesStore.splatParams.transmitter.tx_lat, sitesStore.splatParams.transmitter.tx_lon]
         ) // Initialize the map
+
+        // If there are persisted mesh nodes, fit the map to show all of them
+        if (nodesStore.nodes.length > 0 && mapStore.map) {
+            const bounds = L.latLngBounds(nodesStore.nodes.map(n => [n.lat, n.lon] as [number, number]))
+            mapStore.map.fitBounds(bounds.pad(0.2))
+        }
     })
 
 </script>

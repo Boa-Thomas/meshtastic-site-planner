@@ -111,6 +111,7 @@ export class SimulationEngine {
       payloadSizeBytes: payloadBytes,
       isAck: false,
       retryCount: 0,
+      routePath: [fromNodeId],
     }
 
     const airtime = AirtimeCalculator.calculate(payloadBytes, this.channelPreset)
@@ -151,6 +152,7 @@ export class SimulationEngine {
       payloadSizeBytes: payloadBytes,
       isAck: false,
       retryCount: 0,
+      routePath: [fromNodeId],
     }
 
     const airtime = AirtimeCalculator.calculate(payloadBytes, this.channelPreset)
@@ -352,7 +354,7 @@ export class SimulationEngine {
 
     // Flood routing: rebroadcast if hop limit permits
     if (this.protocol.shouldRebroadcast(packet)) {
-      const rebroadcastPacket = this.protocol.createRebroadcast(packet)
+      const rebroadcastPacket = this.protocol.createRebroadcast(packet, receiverId)
 
       // Contention window: lower SNR → shorter delay (node is farther from origin)
       const delay = ContentionWindow.calculateDelay(packet.snrAtReceiver ?? 0)
@@ -415,6 +417,7 @@ export class SimulationEngine {
     const retryPacket: Packet = {
       ...event.packet,
       retryCount,
+      routePath: [event.sourceNodeId],
       txStartTime: event.time,
       txEndTime: event.time + airtime,
     }

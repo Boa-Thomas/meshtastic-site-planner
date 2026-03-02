@@ -1,5 +1,12 @@
 import type { MeshNode, SplatParams } from '../types/index'
 
+/** Environment, simulation and display settings shared across all nodes. */
+export interface SharedSettings {
+  environment: SplatParams['environment']
+  simulation: SplatParams['simulation']
+  display: SplatParams['display']
+}
+
 // Additional system loss in dB based on obstruction level at the site
 const obstructionLossDb: Record<string, number> = {
   clear: 0,
@@ -34,7 +41,7 @@ const clutterHeightM: Record<string, number> = {
  * - obstructionLevel adds extra system loss on the receiver side
  * - clutter_height is derived from obstructionLevel
  */
-export function nodeToSplatParams(node: MeshNode): SplatParams {
+export function nodeToSplatParams(node: MeshNode, shared?: SharedSettings): SplatParams {
   const effectiveHeight =
     node.antennaHeight * (installationHeightFactor[node.installationType] ?? 1.0)
 
@@ -56,21 +63,23 @@ export function nodeToSplatParams(node: MeshNode): SplatParams {
       rx_gain: node.rxGainDbi,
       rx_loss: node.rxLossDb + extraLoss,
     },
-    environment: {
-      radio_climate: 'continental_temperate',
-      polarization: 'vertical',
-      clutter_height: clutterHeightM[node.obstructionLevel] ?? 1.0,
-      ground_dielectric: 15.0,
-      ground_conductivity: 0.005,
-      atmosphere_bending: 301.0,
-    },
-    simulation: {
+    environment: shared
+      ? { ...shared.environment, clutter_height: clutterHeightM[node.obstructionLevel] ?? 1.0 }
+      : {
+          radio_climate: 'continental_temperate',
+          polarization: 'vertical',
+          clutter_height: clutterHeightM[node.obstructionLevel] ?? 1.0,
+          ground_dielectric: 15.0,
+          ground_conductivity: 0.005,
+          atmosphere_bending: 301.0,
+        },
+    simulation: shared?.simulation ?? {
       situation_fraction: 95.0,
       time_fraction: 95.0,
       simulation_extent: 30.0,
       high_resolution: false,
     },
-    display: {
+    display: shared?.display ?? {
       color_scale: 'plasma',
       min_dbm: -130.0,
       max_dbm: -80.0,

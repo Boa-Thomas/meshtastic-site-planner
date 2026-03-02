@@ -615,6 +615,122 @@ describe('SimulationEngine — getAllLinks', () => {
 })
 
 // ---------------------------------------------------------------------------
+// describe: routePath tracking
+// ---------------------------------------------------------------------------
+
+describe('SimulationEngine — routePath tracking', () => {
+  it('broadcast initial routePath contains only the sender', () => {
+    const engine = new SimulationEngine(makeTriangleNodes(), LONG_FAST)
+    engine.sendBroadcast('A')
+    const event = engine.step()!
+
+    expect(event.type).toBe('message_send')
+    expect(event.packet.routePath).toEqual(['A'])
+  })
+
+  it('rebroadcast appends the relay node to routePath', () => {
+    const nodes = makeLinearNodes()
+    const engine = new SimulationEngine(nodes, LONG_FAST, { durationMs: 60_000 })
+    engine.sendBroadcast('A')
+    engine.run()
+
+    const events = engine.getProcessedEvents()
+    const rebroadcasts = events.filter(e => e.type === 'message_rebroadcast')
+
+    expect(rebroadcasts.length).toBeGreaterThan(0)
+    // B rebroadcasts the packet from A, so routePath should be ['A', 'B']
+    const bRebroadcast = rebroadcasts.find(e => e.sourceNodeId === 'B')
+    expect(bRebroadcast).toBeDefined()
+    expect(bRebroadcast!.packet.routePath).toEqual(['A', 'B'])
+  })
+
+  it('multi-hop: C receives packet with routePath containing A and B', () => {
+    const nodes = makeLinearNodes()
+    const engine = new SimulationEngine(nodes, LONG_FAST, { durationMs: 60_000 })
+    engine.sendBroadcast('A')
+    engine.run()
+
+    const events = engine.getProcessedEvents()
+    // C receives the rebroadcast from B, which has routePath ['A', 'B']
+    const cReceived = events.find(
+      e => e.type === 'message_receive' && e.targetNodeId === 'C'
+    )
+    expect(cReceived).toBeDefined()
+    expect(cReceived!.packet.routePath).toContain('A')
+    expect(cReceived!.packet.routePath).toContain('B')
+  })
+
+  it('ACK routePath starts with the ACK sender', () => {
+    const nodes = makePairNodes()
+    const engine = new SimulationEngine(nodes, LONG_FAST, { durationMs: 60_000 })
+    engine.sendDirect('A', 'B')
+    engine.run()
+
+    const events = engine.getProcessedEvents()
+    const ackSend = events.find(e => e.type === 'ack_send')
+    expect(ackSend).toBeDefined()
+    expect(ackSend!.packet.routePath[0]).toBe('B')
+  })
+
+  it('direct message initial routePath contains only the sender', () => {
+    const nodes = makePairNodes()
+    const engine = new SimulationEngine(nodes, LONG_FAST, { durationMs: 60_000 })
+    engine.sendDirect('A', 'B')
+    const event = engine.step()!
+
+    expect(event.packet.routePath).toEqual(['A'])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// describe: window installation creates asymmetric links
+// ---------------------------------------------------------------------------
+
+describe('SimulationEngine — window install asymmetric links', () => {
+  it('window node creates links with directional loss applied', () => {
+    const nodeA = makeNode('A', 0, 0)
+    const nodeB = makeNode('B', 0, 0.001, {
+      installationType: 'window',
+      windowAzimuth: 270,  // facing West, which is toward A
+    })
+    const engine = new SimulationEngine([nodeA, nodeB], LONG_FAST)
+
+    const ab = engine.getLinkInfo('A', 'B')
+    const ba = engine.getLinkInfo('B', 'A')
+
+    expect(ab).toBeDefined()
+    expect(ba).toBeDefined()
+    // Both directions should work since window faces toward A
+    expect(ab!.canHear).toBe(true)
+    expect(ba!.canHear).toBe(true)
+  })
+
+  it('window facing away makes link weaker', () => {
+    // B faces East (away from A which is to the West)
+    const nodeA = makeNode('A', 0, 0)
+    const nodeB_facing_away = makeNode('B', 0, 0.5, {
+      installationType: 'window',
+      windowAzimuth: 90,  // facing East, away from A
+      obstructionLevel: 'heavy',
+    })
+    const nodeB_omni = makeNode('B_omni', 0, 0.5, {
+      obstructionLevel: 'heavy',
+    })
+
+    const engineWindow = new SimulationEngine([nodeA, nodeB_facing_away], LONG_FAST)
+    const engineOmni = new SimulationEngine([nodeA, nodeB_omni], LONG_FAST)
+
+    const windowLink = engineWindow.getLinkInfo('A', 'B')
+    const omniLink = engineOmni.getLinkInfo('A', 'B_omni')
+
+    expect(windowLink).toBeDefined()
+    expect(omniLink).toBeDefined()
+    // Window facing away should result in weaker signal
+    expect(windowLink!.rssiDbm).toBeLessThan(omniLink!.rssiDbm)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // describe: multiple broadcasts from different nodes
 // ---------------------------------------------------------------------------
 

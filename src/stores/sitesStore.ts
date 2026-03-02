@@ -73,10 +73,11 @@ export const useSitesStore = defineStore('sites', {
           // geotiff-palette hardcodes alpha=255 for all entries so we handle noData (index 255)
           // explicitly by returning null.
           const palette = (site.raster as any).palette as Array<[number, number, number, number]>
+          const opacity = site.params.display.overlay_transparency / 100
           site.rasterLayer = markRaw(new GeoRasterLayer({
             georaster: site.raster,
-            opacity: 0.7,
-            resolution: 128,
+            opacity,
+            resolution: 256,
             pixelValuesToColorFn: (values: number[]) => {
               const idx = values[0]
               if (idx === 255 || !palette) return null // noData → transparent
@@ -85,8 +86,8 @@ export const useSitesStore = defineStore('sites', {
             },
           }))
           site.rasterLayer.addTo(mapStore.map as L.Map)
+          site.rasterLayer.bringToFront()
         }
-        site.rasterLayer.bringToFront()
       })
     },
     async runSimulation() {

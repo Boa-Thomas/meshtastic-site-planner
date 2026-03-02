@@ -2,6 +2,9 @@ import type { MeshNode } from '../types'
 import type { LinkInfo } from './types'
 
 export class LinkBudget {
+  /** Typical field of view for a window installation (degrees). */
+  static readonly WINDOW_BEAMWIDTH = 120
+
   /**
    * Calculate link budget between two nodes using Free Space Path Loss (FSPL).
    * This is the fallback model used when SPLAT! GeoRaster data is unavailable.
@@ -47,6 +50,29 @@ export class LinkBudget {
         LinkBudget.angleDiff(bearing, from.directionalParams.azimuth),
       )
       rssiDbm -= LinkBudget.directionalLoss(offAxis, from.directionalParams.beamwidth)
+    }
+
+    // Window installation loss for the transmitter (restricted field of view)
+    if (from.installationType === 'window' && from.windowAzimuth !== undefined) {
+      const bearing = LinkBudget.bearingDeg(from.lat, from.lon, to.lat, to.lon)
+      const offAxis = Math.abs(LinkBudget.angleDiff(bearing, from.windowAzimuth))
+      rssiDbm -= LinkBudget.directionalLoss(offAxis, LinkBudget.WINDOW_BEAMWIDTH)
+    }
+
+    // Apply directional antenna off-axis loss for the receiver
+    if (to.antennaOrientation === 'directional' && to.directionalParams) {
+      const bearing = LinkBudget.bearingDeg(to.lat, to.lon, from.lat, from.lon)
+      const offAxis = Math.abs(
+        LinkBudget.angleDiff(bearing, to.directionalParams.azimuth),
+      )
+      rssiDbm -= LinkBudget.directionalLoss(offAxis, to.directionalParams.beamwidth)
+    }
+
+    // Window installation loss for the receiver (restricted field of view)
+    if (to.installationType === 'window' && to.windowAzimuth !== undefined) {
+      const bearing = LinkBudget.bearingDeg(to.lat, to.lon, from.lat, from.lon)
+      const offAxis = Math.abs(LinkBudget.angleDiff(bearing, to.windowAzimuth))
+      rssiDbm -= LinkBudget.directionalLoss(offAxis, LinkBudget.WINDOW_BEAMWIDTH)
     }
 
     // SNR approximation: RSSI minus the ambient noise floor

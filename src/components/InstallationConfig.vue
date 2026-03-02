@@ -26,6 +26,19 @@
         <option value="heavy">Heavy</option>
       </select>
     </div>
+    <div v-if="installationType === 'window'" class="col-6">
+      <label class="form-label">Window Azimuth (°)</label>
+      <input
+        type="number"
+        class="form-control form-control-sm"
+        :value="windowAzimuth ?? 0"
+        min="0"
+        max="360"
+        step="1"
+        @input="$emit('update:windowAzimuth', parseFloat(($event.target as HTMLInputElement).value))"
+      />
+      <small class="text-muted">0=N, 90=E, 180=S, 270=W</small>
+    </div>
   </div>
 </template>
 
@@ -35,10 +48,12 @@ import type { InstallationType, ObstructionLevel } from '../types/index'
 defineProps<{
   installationType: InstallationType
   obstructionLevel: ObstructionLevel
+  windowAzimuth?: number
 }>()
 
 defineEmits<{
   'update:installationType': [value: InstallationType]
   'update:obstructionLevel': [value: ObstructionLevel]
+  'update:windowAzimuth': [value: number]
 }>()
 </script>

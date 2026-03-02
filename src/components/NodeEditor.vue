@@ -127,13 +127,15 @@
         </div>
       </div>
 
-      <!-- Installation type + obstruction -->
+      <!-- Installation type + obstruction + window azimuth -->
       <div class="mt-2">
         <InstallationConfig
           :installationType="node.installationType"
           :obstructionLevel="node.obstructionLevel"
+          :windowAzimuth="node.windowAzimuth"
           @update:installationType="v => nodesStore.updateNode(node!.id, { installationType: v })"
           @update:obstructionLevel="v => nodesStore.updateNode(node!.id, { obstructionLevel: v })"
+          @update:windowAzimuth="v => nodesStore.updateNode(node!.id, { windowAzimuth: v })"
         />
       </div>
 
