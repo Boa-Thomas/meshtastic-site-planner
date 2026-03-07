@@ -217,9 +217,7 @@ export const useSitesStore = defineStore('sites', {
           site.rasterLayer = markRaw(new GeoRasterLayer({
             georaster: site.raster,
             opacity: siteOpacity,
-            // 4C.1 — Adaptive resolution by zoom level (object form is valid per GeoRasterLayer docs)
-            resolution: { 0: 16, 5: 32, 8: 64, 12: 128, 15: 256 } as unknown as number,
-            // 4C.4 — Prevent rendering at very low zoom levels
+            resolution: 256,
             minZoom: 3,
             pixelValuesToColorFn: (values: number[]) => colorCache[values[0]],
           }))

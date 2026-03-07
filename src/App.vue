@@ -679,6 +679,11 @@ async function onRunNodeCoverage(nodeId: string, skipPreview = false): Promise<v
       // Full run
       const fullResult = await runSinglePrediction(fullPayload)
 
+      // Wait for preview to fully settle (parseGeoraster + localSites.push) before removing.
+      // Without this await, findIndex returns -1 if the preview's addSiteFromBuffer is still
+      // processing when the full result arrives, leaving an orphaned preview layer on the map.
+      await previewPromise
+
       // Remove preview layer before adding full
       if (previewTaskId) {
         const previewIndex = sitesStore.localSites.findIndex(s => s.taskId === previewTaskId)
@@ -689,10 +694,7 @@ async function onRunNodeCoverage(nodeId: string, skipPreview = false): Promise<v
 
       await sitesStore.addSiteFromBuffer(fullResult.taskId, fullResult.arrayBuffer, splatParams)
       nodesStore.updateNode(nodeId, { siteId: fullResult.taskId })
-      console.log(`[NodeCoverage] Full coverage completed for "${node.name}"`)
-
-      // Ensure preview promise settles (don't leave unhandled)
-      await previewPromise
+      console.log(`[NodeCoverage] Full coverage completed for "${node.name}")`)
     } else {
       // No preview — direct full run
       console.log(`[NodeCoverage] POST /predict for "${node.name}" (no preview, radius=${fullRadiusM}m)`)
