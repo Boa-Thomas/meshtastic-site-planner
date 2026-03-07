@@ -123,7 +123,6 @@ def scale_service(client: docker.DockerClient, service: str, target: int) -> Non
                     "autoscaler.managed": "true",
                 },
                 "mem_limit": ref.attrs["HostConfig"].get("Memory") or None,
-                "volumes_from": None,
             }
 
             # Replicate volume mounts
@@ -153,8 +152,8 @@ def scale_service(client: docker.DockerClient, service: str, target: int) -> Non
         }
         managed = client.containers.list(filters=filters)
 
-        # If not enough managed containers, also consider non-managed (but leave MIN)
-        to_remove = current - target
+        # Only remove autoscaler-managed containers (never touch Compose-created ones)
+        to_remove = min(current - target, len(managed))
         targets = managed[:to_remove]
 
         for c in targets:

@@ -507,7 +507,7 @@ class Splat(PropagationEngine):
         cmap_values = np.linspace(min_dbm, max_dbm, 255)
 
         # Map data values to RGB for visible colors
-        rgb_colors = list(cmap(cmap_norm(cmap_values))[:, :3] * 255).astype(int)
+        rgb_colors = (cmap(cmap_norm(cmap_values))[:, :3] * 255).astype(int)
         return rgb_colors
 
 
