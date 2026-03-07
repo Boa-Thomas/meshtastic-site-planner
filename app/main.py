@@ -30,8 +30,11 @@ from app.models.coverage_site import CoverageSite
 from app.routers import nodes as nodes_router
 from app.routers import sites as sites_router
 from app.routers import projects as projects_router
+from app.routers import debug as debug_router
 import logging
 import io
+import time
+from typing import List
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,6 +74,7 @@ init_db()
 app.include_router(nodes_router.router)
 app.include_router(sites_router.router)
 app.include_router(projects_router.router)
+app.include_router(debug_router.router)
 
 def run_splat(task_id: str, request: CoveragePredictionRequest):
     """
@@ -91,7 +95,7 @@ def run_splat(task_id: str, request: CoveragePredictionRequest):
     try:
         logger.info(f"Starting coverage prediction for task {task_id}.")
         engine = get_engine(request.engine)
-        geotiff_data = engine.coverage_prediction(request)
+        geotiff_data = engine.coverage_prediction(request, task_id=task_id)
 
         # Log before storing in Redis
         logger.info(f"Storing result in Redis for task {task_id}")
@@ -125,24 +129,13 @@ def run_splat(task_id: str, request: CoveragePredictionRequest):
         redis_client.setex(f"{task_id}:error", 3600, str(e))
         raise
 
-@app.post("/predict")
-@limiter.limit("5/minute")
-async def predict(request: Request, payload: CoveragePredictionRequest, background_tasks: BackgroundTasks) -> JSONResponse:
+def _dispatch_prediction(payload: CoveragePredictionRequest, background_tasks: BackgroundTasks | None = None) -> dict:
     """
-    Predict signal coverage using SPLAT!.
-    Accepts a CoveragePredictionRequest and processes it in the background.
+    Dispatch a single coverage prediction task.
 
-    Returns a cached result if the same RF parameters have been computed before.
-    Display-only parameters (colormap, min_dbm, max_dbm) are excluded from the cache key.
-
-    Args:
-        payload (CoveragePredictionRequest): The parameters required for the SPLAT! coverage prediction.
-        background_tasks (BackgroundTasks): FastAPI background tasks.
-
-    Returns:
-        JSONResponse: A response containing the unique task ID to track the prediction progress.
+    Returns dict with task_id and cached flag.
+    Reused by both /predict and /predict/batch endpoints.
     """
-    # Check RF parameter cache — return existing task if same RF params were already computed
     rf_hash = payload.rf_param_hash()
     cached_task_id = redis_client.get(f"rfcache:{rf_hash}")
     if cached_task_id:
@@ -150,7 +143,7 @@ async def predict(request: Request, payload: CoveragePredictionRequest, backgrou
         cached_status = redis_client.get(f"{cached_task_id}:status")
         if cached_status and cached_status.decode("utf-8") in ("completed", "processing"):
             logger.info(f"RF cache hit for hash {rf_hash}, returning task {cached_task_id}")
-            return JSONResponse({"task_id": cached_task_id, "cached": True})
+            return {"task_id": cached_task_id, "cached": True}
 
     task_id = str(uuid4())
     redis_client.setex(f"{task_id}:status", 3600, "processing")
@@ -160,9 +153,42 @@ async def predict(request: Request, payload: CoveragePredictionRequest, backgrou
         heavy_threshold = int(os.environ.get("HEAVY_RADIUS_THRESHOLD_KM", "200")) * 1000
         queue = "heavy" if payload.radius > heavy_threshold else "default"
         run_splat_task.apply_async(args=[task_id, payload.model_dump()], queue=queue)
-    else:
+    elif background_tasks:
         background_tasks.add_task(run_splat, task_id, payload)
-    return JSONResponse({"task_id": task_id})
+    return {"task_id": task_id, "cached": False}
+
+
+@app.post("/predict")
+@limiter.limit("5/minute")
+async def predict(request: Request, payload: CoveragePredictionRequest, background_tasks: BackgroundTasks) -> JSONResponse:
+    """
+    Predict signal coverage using SPLAT!.
+    Accepts a CoveragePredictionRequest and processes it in the background.
+
+    Returns a cached result if the same RF parameters have been computed before.
+    Display-only parameters (colormap, min_dbm, max_dbm) are excluded from the cache key.
+    """
+    result = _dispatch_prediction(payload, background_tasks)
+    return JSONResponse(result)
+
+
+@app.post("/predict/batch")
+@limiter.limit("3/minute")
+async def predict_batch(request: Request, payloads: List[CoveragePredictionRequest], background_tasks: BackgroundTasks) -> JSONResponse:
+    """
+    Submit multiple coverage predictions at once.
+    All tasks are dispatched simultaneously, allowing the autoscaler to see
+    the full queue depth and scale workers accordingly.
+
+    Max 10 predictions per batch.
+    """
+    if len(payloads) > 10:
+        return JSONResponse({"error": "Max 10 predictions per batch"}, status_code=400)
+    if len(payloads) == 0:
+        return JSONResponse({"error": "At least 1 prediction required"}, status_code=400)
+
+    tasks = [_dispatch_prediction(p, background_tasks) for p in payloads]
+    return JSONResponse({"tasks": tasks})
 
 @app.get("/status/{task_id}")
 async def get_status(task_id: UUID):
@@ -196,15 +222,38 @@ async def task_events(task_id: UUID):
     tid = str(task_id)
 
     async def event_generator():
+        heartbeat_counter = 0
         while True:
             status = redis_client.get(f"{tid}:status")
             if not status:
                 yield f"data: {json.dumps({'task_id': tid, 'status': 'not_found'})}\n\n"
                 return
             status_str = status.decode("utf-8")
-            yield f"data: {json.dumps({'task_id': tid, 'status': status_str})}\n\n"
+            event_data = {"task_id": tid, "status": status_str}
+
+            # Include progress data if available
+            if status_str == "processing":
+                progress_raw = redis_client.get(f"{tid}:progress")
+                if progress_raw:
+                    try:
+                        progress = json.loads(progress_raw.decode("utf-8"))
+                        event_data.update({
+                            "stage": progress.get("stage", ""),
+                            "progress": progress.get("progress", 0),
+                            "detail": progress.get("detail", ""),
+                        })
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        pass
+
+            yield f"data: {json.dumps(event_data)}\n\n"
             if status_str in ("completed", "failed"):
                 return
+
+            # Heartbeat every ~15s to keep connection alive
+            heartbeat_counter += 1
+            if heartbeat_counter % 30 == 0:
+                yield ": heartbeat\n\n"
+
             await asyncio.sleep(0.5)
 
     return StreamingResponse(
@@ -212,6 +261,91 @@ async def task_events(task_id: UUID):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+@app.get("/events/multi")
+async def multi_task_events(task_ids: str):
+    """
+    SSE stream that monitors multiple tasks simultaneously.
+    Emits an event for each task that reaches a terminal state.
+    Closes when all tasks are completed/failed.
+
+    Query param: task_ids — comma-separated list of task UUIDs (max 10).
+    """
+    ids = [t.strip() for t in task_ids.split(",") if t.strip()]
+    if len(ids) > 10:
+        return JSONResponse({"error": "Max 10 task IDs"}, status_code=400)
+    if not ids:
+        return JSONResponse({"error": "No task IDs provided"}, status_code=400)
+
+    async def event_generator():
+        pending = set(ids)
+        heartbeat_counter = 0
+
+        while pending:
+            for tid in list(pending):
+                status = redis_client.get(f"{tid}:status")
+                if not status:
+                    event_data = {"task_id": tid, "status": "not_found"}
+                    yield f"data: {json.dumps(event_data)}\n\n"
+                    pending.discard(tid)
+                    continue
+
+                status_str = status.decode("utf-8")
+                event_data = {"task_id": tid, "status": status_str}
+
+                # Include progress data if available
+                if status_str == "processing":
+                    progress_raw = redis_client.get(f"{tid}:progress")
+                    if progress_raw:
+                        try:
+                            progress = json.loads(progress_raw.decode("utf-8"))
+                            event_data.update({
+                                "stage": progress.get("stage", ""),
+                                "progress": progress.get("progress", 0),
+                                "detail": progress.get("detail", ""),
+                            })
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            pass
+
+                if status_str in ("completed", "failed"):
+                    yield f"data: {json.dumps(event_data)}\n\n"
+                    pending.discard(tid)
+
+            if not pending:
+                break
+
+            # Emit progress updates for still-processing tasks
+            for tid in list(pending):
+                status = redis_client.get(f"{tid}:status")
+                if status:
+                    status_str = status.decode("utf-8")
+                    event_data = {"task_id": tid, "status": status_str}
+                    progress_raw = redis_client.get(f"{tid}:progress")
+                    if progress_raw:
+                        try:
+                            progress = json.loads(progress_raw.decode("utf-8"))
+                            event_data.update({
+                                "stage": progress.get("stage", ""),
+                                "progress": progress.get("progress", 0),
+                                "detail": progress.get("detail", ""),
+                            })
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            pass
+                    yield f"data: {json.dumps(event_data)}\n\n"
+
+            # Heartbeat every ~15s to keep connection alive (30 iterations * 0.5s)
+            heartbeat_counter += 1
+            if heartbeat_counter % 30 == 0:
+                yield ": heartbeat\n\n"
+
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
 
 @app.get("/result/{task_id}")
 async def get_result(task_id: UUID):

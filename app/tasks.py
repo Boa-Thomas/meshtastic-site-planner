@@ -48,7 +48,7 @@ def run_splat_task(self, task_id: str, request_dict: dict):
         logger.info(f"[Celery] Starting coverage prediction for task {task_id} (attempt {self.request.retries + 1})")
         request = CoveragePredictionRequest(**request_dict)
         engine = _get_engine(request.engine)
-        geotiff_data = engine.coverage_prediction(request)
+        geotiff_data = engine.coverage_prediction(request, task_id=task_id)
 
         r.setex(task_id, 3600, geotiff_data)
         r.setex(f"{task_id}:status", 3600, "completed")

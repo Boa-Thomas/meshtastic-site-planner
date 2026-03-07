@@ -133,12 +133,31 @@ class Splat(PropagationEngine):
             os.path.isfile(self.splat_hd_binary) and os.access(self.splat_hd_binary, os.X_OK)
         )
 
-    def coverage_prediction(self, request: CoveragePredictionRequest) -> bytes:
+    def _report_progress(self, task_id: str | None, stage: str, progress: float, detail: str = "") -> None:
+        """Write progress data to Redis for SSE streaming."""
+        if not task_id:
+            return
+        try:
+            import json
+            import redis as _redis
+            host = os.environ.get("REDIS_HOST", "redis")
+            port = int(os.environ.get("REDIS_PORT", "6379"))
+            r = _redis.StrictRedis(host=host, port=port, decode_responses=False)
+            r.setex(f"{task_id}:progress", 3600, json.dumps({
+                "stage": stage,
+                "progress": round(progress, 2),
+                "detail": detail,
+            }))
+        except Exception as e:
+            logger.debug(f"Failed to report progress for {task_id}: {e}")
+
+    def coverage_prediction(self, request: CoveragePredictionRequest, *, task_id: str | None = None) -> bytes:
         """
         Execute a SPLAT! coverage prediction using the provided CoveragePredictionRequest.
 
         Args:
             request (CoveragePredictionRequest): The coverage prediction request object.
+            task_id: Optional task ID for progress reporting via Redis.
 
         Returns:
             bytes: the SPLAT! coverage prediction as a GeoTIFF.
@@ -163,9 +182,13 @@ class Splat(PropagationEngine):
 
                 # determine the required terrain tiles
                 required_tiles = Splat._calculate_required_terrain_tiles(request.lat, request.lon, request.radius)
+                total_tiles = len(required_tiles)
+
+                self._report_progress(task_id, "downloading_tiles", 0.05, f"0/{total_tiles} tiles")
 
                 # download and convert terrain tiles to SPLAT! sdf (parallel)
                 max_workers = min(len(required_tiles), 8)
+                completed_tiles = 0
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = {
                         executor.submit(
@@ -177,6 +200,12 @@ class Splat(PropagationEngine):
                     }
                     for future in as_completed(futures):
                         future.result()  # Propagate exceptions
+                        completed_tiles += 1
+                        tile_progress = 0.05 + (completed_tiles / total_tiles) * 0.25
+                        self._report_progress(task_id, "downloading_tiles", tile_progress,
+                                              f"{completed_tiles}/{total_tiles} tiles")
+
+                self._report_progress(task_id, "configuring", 0.35, "Writing model parameters")
 
                 # write transmitter / qth file
                 with open(os.path.join(tmpdir, "tx.qth"), "wb") as qth_file:
@@ -202,6 +231,8 @@ class Splat(PropagationEngine):
                     dcf_file.write(Splat._create_splat_dcf())
 
                 logger.debug(f"Contents of {tmpdir}: {os.listdir(tmpdir)}")
+
+                self._report_progress(task_id, "running_splat", 0.40, "Starting SPLAT! simulation")
 
                 splat_command = [
                     (
@@ -251,11 +282,15 @@ class Splat(PropagationEngine):
                         f"Stdout: {splat_result.stdout}\nStderr: {splat_result.stderr}"
                     )
 
+                self._report_progress(task_id, "converting", 0.90, "Generating GeoTIFF")
+
                 with open(os.path.join(tmpdir, "output.ppm"), "rb") as ppm_file:
                     with open(os.path.join(tmpdir, "output.kml"), "rb") as kml_file:
                         ppm_data = ppm_file.read()
                         kml_data = kml_file.read()
                         geotiff_data = ppm_kml_to_geotiff(ppm_data, kml_data)
+
+                self._report_progress(task_id, "completed", 1.0)
 
                 logger.info("SPLAT! coverage prediction completed successfully.")
                 return geotiff_data

@@ -53,7 +53,7 @@ class SignalServerEngine(PropagationEngine):
     def is_available(self) -> bool:
         return os.path.isfile(self._binary_path) and os.access(self._binary_path, os.X_OK)
 
-    def coverage_prediction(self, request: CoveragePredictionRequest) -> bytes:
+    def coverage_prediction(self, request: CoveragePredictionRequest, *, task_id: str | None = None) -> bytes:
         logger.info(f"Signal Server prediction: lat={request.lat}, lon={request.lon}, radius={request.radius}m")
 
         model_name = getattr(request, "propagation_model", None) or self._default_model
