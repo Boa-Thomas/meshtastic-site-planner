@@ -157,7 +157,9 @@ async def predict(request: Request, payload: CoveragePredictionRequest, backgrou
     redis_client.setex(f"rfcache:{rf_hash}", 3600, task_id)
     if USE_CELERY:
         from app.tasks import run_splat_task
-        run_splat_task.delay(task_id, payload.model_dump())
+        heavy_threshold = int(os.environ.get("HEAVY_RADIUS_THRESHOLD_KM", "200")) * 1000
+        queue = "heavy" if payload.radius > heavy_threshold else "default"
+        run_splat_task.apply_async(args=[task_id, payload.model_dump()], queue=queue)
     else:
         background_tasks.add_task(run_splat, task_id, payload)
     return JSONResponse({"task_id": task_id})

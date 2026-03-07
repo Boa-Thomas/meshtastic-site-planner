@@ -32,6 +32,8 @@ RUN sed -i 's/\r//' build configure install && \
 RUN sed -i.bak 's/-march=\$cpu/-march=native/g' build && \
     sed -i 's/-O2/-O3/g' build && \
     printf "8\n4\n" | ./configure && \
+    sed -i 's/#define MAXPAGES 64/#define MAXPAGES 225/' std-parms.h && \
+    echo '#define ARRAYSIZE 270225' >> std-parms.h && \
     ./install splat
 # RUN cp ./splat /app/splat
 

@@ -62,10 +62,21 @@ pnpm run dev        # Frontend dev server with hot reload (proxies API to :8080)
 ### Full Stack (with SPLAT! backend)
 
 ```bash
-docker-compose up --build
+# Linux/Mac
+./setup.sh
+
+# Windows
+setup.bat
 ```
 
-This compiles the SPLAT! C++ binary, starts FastAPI + Redis + Nginx with automatic Let's Encrypt.
+Or manually:
+
+```bash
+cp .env.example .env        # Review and adjust settings
+docker compose up --build   # Build SPLAT! + start all services
+```
+
+This compiles the SPLAT! C++ binary (with MAXPAGES=225 for up to 600 km radius), starts FastAPI, Redis, Celery workers, autoscaler, Nginx, and Let's Encrypt.
 
 ### Tests
 
@@ -93,14 +104,49 @@ Frontend (Vue 3 + TypeScript + Pinia)
 Backend (FastAPI + Python)
 ├── POST /predict     Submit coverage prediction request
 ├── GET /status/{id}  Poll task status
+├── GET /events/{id}  SSE stream for real-time task updates
 ├── GET /result/{id}  Download GeoTIFF result
 └── SPLAT! pipeline   SRTM download → HGT→SDF → SPLAT! → PPM+KML → GeoTIFF
 
 Infrastructure
 ├── Docker Compose    app + redis + nginx-proxy + acme-companion
+│                     + worker (light) + worker-heavy + autoscaler + flower
 ├── AWS S3            SRTM terrain tile streaming
-└── Redis             Task queue and result caching
+└── Redis             Task queue, result cache, Celery broker
 ```
+
+### Worker Architecture
+
+Simulations are processed by Celery workers split into two queue types:
+
+| Service | Queue | Memory | Default Replicas | Purpose |
+|---------|-------|--------|-----------------|---------|
+| `worker` | `default` | 4 GB | 2 | Simulations up to 200 km |
+| `worker-heavy` | `heavy,default` | 8 GB | 1 | Simulations over 200 km (also helps with default queue) |
+
+An **autoscaler** service monitors Redis queue depth and dynamically scales workers via the Docker API:
+
+- **Idle:** 1 light + 1 heavy workers (minimum baseline)
+- **Under load:** Up to 4 light + 3 heavy = 7 parallel workers
+- **Cooldown:** Scales down to baseline after 120s of empty queues
+
+### Environment Variables
+
+Copy `.env.example` to `.env` and adjust as needed. Key variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CELERY_LIGHT_WORKERS` | `2` | Initial light worker replicas |
+| `CELERY_HEAVY_WORKERS` | `1` | Initial heavy worker replicas |
+| `WORKER_LIGHT_MEM` | `4G` | Memory limit per light worker |
+| `WORKER_HEAVY_MEM` | `8G` | Memory limit per heavy worker |
+| `MAX_LIGHT_WORKERS` | `4` | Maximum light workers (autoscaler) |
+| `MAX_HEAVY_WORKERS` | `3` | Maximum heavy workers (autoscaler) |
+| `HEAVY_RADIUS_THRESHOLD_KM` | `200` | Radius threshold for heavy queue routing |
+| `MAX_SIMULATION_RADIUS_KM` | `600` | Maximum simulation radius |
+| `SCALE_DOWN_DELAY` | `120` | Seconds before autoscaler reduces workers |
+
+See `.env.example` for the full list.
 
 ## Usage
 

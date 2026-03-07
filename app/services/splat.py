@@ -155,10 +155,11 @@ class Splat(PropagationEngine):
                 # FIXME: Eventually support high-resolution terrain data
                 request.high_resolution = False
 
-                # Set hard limit of 400 km radius (MAXPAGES=64 supports ~445km at equator)
-                if request.radius > 400_000:
-                    logger.warning(f"User tried to set radius of {request.radius} meters, clamping to 400 km.")
-                    request.radius = 400_000
+                # Configurable radius cap (MAXPAGES=225 supports ~810km at equator, ~600km at lat 50)
+                max_radius_m = int(os.environ.get("MAX_SIMULATION_RADIUS_KM", "600")) * 1000
+                if request.radius > max_radius_m:
+                    logger.warning(f"Radius {request.radius}m exceeds limit, clamping to {max_radius_m}m.")
+                    request.radius = max_radius_m
 
                 # determine the required terrain tiles
                 required_tiles = Splat._calculate_required_terrain_tiles(request.lat, request.lon, request.radius)
@@ -506,7 +507,7 @@ class Splat(PropagationEngine):
         cmap_values = np.linspace(min_dbm, max_dbm, 255)
 
         # Map data values to RGB for visible colors
-        rgb_colors = list(cmap(cmap_norm(cmap_values))[:, :3] * 255).astype(int)
+        rgb_colors = (cmap(cmap_norm(cmap_values))[:, :3] * 255).astype(int)
         return rgb_colors
 
 
