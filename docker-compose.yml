@@ -1,3 +1,21 @@
+x-worker-base: &worker-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  volumes:
+    - splat-tile-cache:/app/.splat_tiles
+  environment:
+    - HOME=/home/appuser
+    - TERM=xterm
+    - REDIS_HOST=redis
+    - SPLAT_TILE_CACHE=/app/.splat_tiles
+  depends_on:
+    - redis
+  working_dir: "/app"
+  restart: unless-stopped
+  networks:
+    - app-network
+
 services:
   app:
     build:
@@ -13,6 +31,7 @@ services:
       - VIRTUAL_PORT=8080
       - LETSENCRYPT_HOST=site.meshtastic.org
       - USE_CELERY=true
+      - HEAVY_RADIUS_THRESHOLD_KM=${HEAVY_RADIUS_THRESHOLD_KM:-200}
     mem_limit: 12G
     ports:
       - 8080:8080
@@ -68,19 +87,39 @@ services:
       - app-network
 
   worker:
-    build: .
+    <<: *worker-base
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info",
+              "--concurrency=1", "-Q", "default", "-n", "light@%h"]
+    mem_limit: ${WORKER_LIGHT_MEM:-4G}
+    deploy:
+      replicas: ${CELERY_LIGHT_WORKERS:-2}
+
+  worker-heavy:
+    <<: *worker-base
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info",
+              "--concurrency=1", "-Q", "heavy,default", "-n", "heavy@%h"]
+    mem_limit: ${WORKER_HEAVY_MEM:-8G}
+    deploy:
+      replicas: ${CELERY_HEAVY_WORKERS:-1}
+
+  autoscaler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.autoscaler"]
     volumes:
-      - splat-tile-cache:/app/.splat_tiles
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - HOME=/home/appuser
-      - TERM=xterm
       - REDIS_HOST=redis
-      - SPLAT_TILE_CACHE=/app/.splat_tiles
-    mem_limit: 6G
+      - MIN_LIGHT_WORKERS=${MIN_LIGHT_WORKERS:-1}
+      - MAX_LIGHT_WORKERS=${MAX_LIGHT_WORKERS:-4}
+      - MIN_HEAVY_WORKERS=${MIN_HEAVY_WORKERS:-1}
+      - MAX_HEAVY_WORKERS=${MAX_HEAVY_WORKERS:-3}
+      - SCALE_DOWN_DELAY=${SCALE_DOWN_DELAY:-120}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-10}
+      - COMPOSE_PROJECT=${COMPOSE_PROJECT_NAME:-meshtastic-site-planner}
     depends_on:
       - redis
-    working_dir: "/app"
-    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--concurrency=1"]
     restart: unless-stopped
     networks:
       - app-network

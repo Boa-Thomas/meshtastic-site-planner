@@ -15,8 +15,14 @@
         <div class="row g-2 mt-2">
             <div class="col-6">
                 <label for="simulation_extent" class="form-label">Max Range (km)</label>
-                <input v-model="simulation.simulation_extent" type="number" class="form-control form-control-sm" id="simulation_extent" required min="1" max="400" step="1" />
-                <div class="invalid-feedback">Radius must be between 1 and 400 km.</div>
+                <input v-model="simulation.simulation_extent" type="number" class="form-control form-control-sm" id="simulation_extent" required min="1" max="600" step="1" />
+                <div class="invalid-feedback">Radius must be between 1 and 600 km.</div>
+            </div>
+            <div class="col-12" v-if="simulation.simulation_extent > 200">
+                <small class="text-warning">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Large simulation (~{{ estimatedTiles }} tiles). May take several minutes.
+                </small>
             </div>
         </div>
         <div class="row mt-3">
@@ -32,6 +38,12 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useSitesStore } from '../stores/sitesStore'
 const simulation = useSitesStore().splatParams.simulation
+
+const estimatedTiles = computed(() => {
+    const side = Math.ceil(2 * simulation.simulation_extent / 111 + 2)
+    return side * side
+})
 </script>
