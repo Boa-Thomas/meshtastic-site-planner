@@ -49,6 +49,14 @@ vi.mock('../../utils', () => ({
   cloneObject: (obj: unknown) => JSON.parse(JSON.stringify(obj)),
 }))
 
+// Mock the API module so tests don't need a running backend
+vi.mock('../../services/api', () => ({
+  getSites: vi.fn().mockResolvedValue([]),
+  getSiteRaster: vi.fn().mockResolvedValue(new ArrayBuffer(0)),
+  deleteSiteApi: vi.fn().mockResolvedValue(undefined),
+  deleteAllSites: vi.fn().mockResolvedValue(undefined),
+}))
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -106,7 +114,7 @@ describe('sitesStore', () => {
   // ---------------------------------------------------------------------------
 
   describe('removeSite', () => {
-    it('removes the site at the given index', () => {
+    it('removes the site at the given index', async () => {
       const store = useSitesStore()
 
       // Push a mock site without a rasterLayer so no map interaction is needed
@@ -119,12 +127,12 @@ describe('sitesStore', () => {
 
       expect(store.localSites.length).toBe(1)
 
-      store.removeSite(0)
+      await store.removeSite(0)
 
       expect(store.localSites.length).toBe(0)
     })
 
-    it('removes only the site at the specified index when multiple exist', () => {
+    it('removes only the site at the specified index when multiple exist', async () => {
       const store = useSitesStore()
 
       store.localSites.push({
@@ -138,7 +146,7 @@ describe('sitesStore', () => {
         raster: {},
       })
 
-      store.removeSite(0)
+      await store.removeSite(0)
 
       expect(store.localSites.length).toBe(1)
       expect(store.localSites[0].taskId).toBe('task-002')

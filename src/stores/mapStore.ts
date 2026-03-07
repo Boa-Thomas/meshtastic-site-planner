@@ -59,9 +59,9 @@ export const useMapStore = defineStore('map', {
         })
       })
 
-      // Restore persisted coverage layers from IndexedDB (also calls redrawSites)
+      // Restore persisted coverage layers from server (also calls redrawSites)
       import('./sitesStore').then(({ useSitesStore }) => {
-        useSitesStore().restoreFromIndexedDB()
+        useSitesStore().restoreFromServer()
       })
     },
   },

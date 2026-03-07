@@ -8,6 +8,10 @@ import type { SimEvent, SimulationConfig } from '../des/types'
 import type { SharedSettings } from '../utils/nodeToSplatParams'
 import type { SplatParams } from '../types/index'
 import L from 'leaflet'
+import {
+  exportProjectFromServer,
+  importProjectToServer,
+} from '../services/api'
 
 // ---------------------------------------------------------------------------
 // Project file format
@@ -87,6 +91,24 @@ export function useProjectIO() {
       // Yield to let the browser paint the spinner
       await new Promise(r => setTimeout(r, 0))
 
+      // Try server-side export first
+      try {
+        const blob = await exportProjectFromServer()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        const date = new Date().toISOString().slice(0, 10)
+        a.download = `meshtastic-project-${date}.json.gz`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+        return
+      } catch (serverErr) {
+        console.warn('[ProjectIO] Server export failed, falling back to client-side:', serverErr)
+      }
+
+      // Fallback: client-side export
       const sitesStore = useSitesStore()
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
@@ -167,7 +189,55 @@ export function useProjectIO() {
     importError.value = ''
 
     try {
-      // Support both compressed (.json.gz) and plain (.json) files
+      // Try server-side import first
+      try {
+        await importProjectToServer(file)
+        // Refresh local state from server
+        nodesStore.initialized = false
+        await nodesStore.initialize()
+        await sitesStore.restoreFromServer()
+
+        // Parse the file locally for map viewport and DES config
+        let text: string
+        if (file.name.endsWith('.gz')) {
+          const decompressed = await decompressBlob(file)
+          text = await decompressed.text()
+        } else {
+          text = await file.text()
+        }
+        const data: ProjectFile = JSON.parse(text)
+
+        // Restore shared splatParams
+        if (data.splatParams) {
+          Object.assign(sitesStore.splatParams, data.splatParams)
+        }
+
+        // Restore DES config
+        if (data.desConfig) {
+          desStore.updateConfig(data.desConfig)
+        }
+
+        // Restore map viewport
+        if (data.map && mapStore.map) {
+          mapStore.map.setView(
+            L.latLng(data.map.center[0], data.map.center[1]),
+            data.map.zoom,
+            { animate: false },
+          )
+        }
+
+        // Restore DES events (optional)
+        if (Array.isArray(data.desEvents) && data.desEvents.length > 0) {
+          desStore.processedEvents = data.desEvents
+          desStore.currentEventIndex = data.desEvents.length - 1
+        }
+
+        return
+      } catch (serverErr) {
+        console.warn('[ProjectIO] Server import failed, falling back to client-side:', serverErr)
+      }
+
+      // Fallback: client-side import
       let text: string
       if (file.name.endsWith('.gz')) {
         const decompressed = await decompressBlob(file)
@@ -183,14 +253,14 @@ export function useProjectIO() {
       }
 
       // 1. Clear current state
-      sitesStore.removeAllSites()
-      nodesStore.clearAllNodes()
+      await sitesStore.removeAllSites()
+      await nodesStore.clearAllNodes()
       desStore.reset()
 
       // 2. Restore nodes
       if (Array.isArray(data.nodes)) {
         for (const nodeData of data.nodes) {
-          nodesStore.addNode(nodeData as MeshNode)
+          await nodesStore.addNode(nodeData as MeshNode)
         }
       }
 
@@ -212,7 +282,7 @@ export function useProjectIO() {
             await sitesStore.addSiteFromBuffer(site.taskId, arrayBuffer, site.params)
             // Re-link node → site
             if (site.nodeId) {
-              nodesStore.updateNode(site.nodeId, { siteId: site.taskId })
+              await nodesStore.updateNode(site.nodeId, { siteId: site.taskId })
             }
           } catch (err) {
             console.warn(`[ProjectIO] Failed to restore site ${site.taskId}:`, err)

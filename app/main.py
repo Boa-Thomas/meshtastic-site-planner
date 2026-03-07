@@ -25,6 +25,11 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from app.services.engine_factory import get_engine
 from app.models.CoveragePredictionRequest import CoveragePredictionRequest
+from app.database import init_db, SessionLocal, RASTER_DIR
+from app.models.coverage_site import CoverageSite
+from app.routers import nodes as nodes_router
+from app.routers import sites as sites_router
+from app.routers import projects as projects_router
 import logging
 import io
 
@@ -59,6 +64,14 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
+# Initialize database tables
+init_db()
+
+# Register API routers (must be before static file mount)
+app.include_router(nodes_router.router)
+app.include_router(sites_router.router)
+app.include_router(projects_router.router)
+
 def run_splat(task_id: str, request: CoveragePredictionRequest):
     """
     Execute the SPLAT! coverage prediction and store the resulting GeoTIFF data in Redis.
@@ -85,6 +98,27 @@ def run_splat(task_id: str, request: CoveragePredictionRequest):
         redis_client.setex(task_id, 3600, geotiff_data)
         redis_client.setex(f"{task_id}:status", 3600, "completed")
         logger.info(f"Task {task_id} marked as completed.")
+
+        # Persist GeoTIFF to disk + database for long-term storage
+        try:
+            os.makedirs(RASTER_DIR, exist_ok=True)
+            raster_path = os.path.join(RASTER_DIR, f"{task_id}.tif")
+            with open(raster_path, "wb") as f:
+                f.write(geotiff_data)
+            db = SessionLocal()
+            try:
+                site = CoverageSite(
+                    task_id=task_id,
+                    params=json.dumps(request.model_dump()),
+                    raster_path=raster_path,
+                )
+                db.add(site)
+                db.commit()
+            finally:
+                db.close()
+            logger.info(f"Task {task_id} persisted to disk.")
+        except Exception as persist_err:
+            logger.warning(f"Failed to persist task {task_id} to disk: {persist_err}")
     except Exception as e:
         logger.error(f"Error in SPLAT! task {task_id}: {e}")
         redis_client.setex(f"{task_id}:status", 3600, "failed")
@@ -197,13 +231,32 @@ async def get_result(task_id: UUID):
     tid = str(task_id)
     status = redis_client.get(f"{tid}:status")
     if not status:
-        logger.warning(f"Task {tid} not found in Redis.")
+        # Fall back to disk storage if Redis TTL expired
+        raster_path = os.path.join(RASTER_DIR, f"{tid}.tif")
+        if os.path.exists(raster_path):
+            from fastapi.responses import FileResponse
+            logger.info(f"Task {tid} served from disk (Redis expired).")
+            return FileResponse(
+                raster_path,
+                media_type="image/tiff",
+                headers={"Content-Disposition": f"attachment; filename={tid}.tif"},
+            )
+        logger.warning(f"Task {tid} not found in Redis or on disk.")
         return JSONResponse({"error": "Task not found"}, status_code=404)
 
     status = status.decode("utf-8")
     if status == "completed":
         geotiff_data = redis_client.get(tid)
         if not geotiff_data:
+            # Redis data expired but status still present — try disk
+            raster_path = os.path.join(RASTER_DIR, f"{tid}.tif")
+            if os.path.exists(raster_path):
+                from fastapi.responses import FileResponse
+                return FileResponse(
+                    raster_path,
+                    media_type="image/tiff",
+                    headers={"Content-Disposition": f"attachment; filename={tid}.tif"},
+                )
             logger.error(f"No data found for completed task {tid}.")
             return JSONResponse({"error": "No result found"}, status_code=500)
 

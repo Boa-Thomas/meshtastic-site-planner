@@ -6,6 +6,7 @@ services:
     volumes:
       - ./ui:/app/ui
       - splat-tile-cache:/app/.splat_tiles
+      - planner-data:/app/app/data
     environment:
       - HOME=/home/appuser
       - TERM=xterm
@@ -109,4 +110,5 @@ volumes:
   html:
   certs:
   acme:
+  planner-data:
   splat-tile-cache:
