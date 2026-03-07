@@ -107,6 +107,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    user: root
     command: ["python", "-m", "app.autoscaler"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
