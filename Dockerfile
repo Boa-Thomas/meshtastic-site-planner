@@ -25,12 +25,13 @@ COPY . .
 
 # Change to SPLAT directory and fix line endings + set permissions
 WORKDIR /app/splat
-RUN sed -i 's/\r//' build configure install && \
-    chmod +x build && chmod +x configure && chmod +x install
+RUN sed -i 's/\r//' build configure install utils/build utils/install && \
+    chmod +x build configure install utils/build utils/install
 
 # Modify build script and configure SPLAT (use -O3 for max vectorization/inlining)
 RUN sed -i.bak 's/-march=\$cpu/-march=native/g' build && \
     sed -i 's/-O2/-O3/g' build && \
+    sed -i 's/g++ -O3/g++ -O3 -Wno-register/g' build && \
     printf "8\n4\n" | ./configure && \
     ./install splat
 # RUN cp ./splat /app/splat
