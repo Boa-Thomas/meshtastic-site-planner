@@ -208,7 +208,12 @@ async def get_status(task_id: UUID):
     tid = str(task_id)
     status = redis_client.get(f"{tid}:status")
     if not status:
-        logger.warning(f"Task {tid} not found in Redis.")
+        # Redis TTL may have expired — check disk before returning 404
+        raster_path = os.path.join(RASTER_DIR, f"{tid}.tif")
+        if os.path.exists(raster_path):
+            logger.info(f"Task {tid} not in Redis but found on disk — returning completed.")
+            return JSONResponse({"task_id": tid, "status": "completed"})
+        logger.warning(f"Task {tid} not found in Redis or on disk.")
         return JSONResponse({"error": "Task not found"}, status_code=404)
 
     return JSONResponse({"task_id": tid, "status": status.decode("utf-8")})
@@ -226,7 +231,11 @@ async def task_events(task_id: UUID):
         while True:
             status = redis_client.get(f"{tid}:status")
             if not status:
-                yield f"data: {json.dumps({'task_id': tid, 'status': 'not_found'})}\n\n"
+                raster_path = os.path.join(RASTER_DIR, f"{tid}.tif")
+                if os.path.exists(raster_path):
+                    yield f"data: {json.dumps({'task_id': tid, 'status': 'completed'})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'task_id': tid, 'status': 'not_found'})}\n\n"
                 return
             status_str = status.decode("utf-8")
             event_data = {"task_id": tid, "status": status_str}
@@ -285,7 +294,9 @@ async def multi_task_events(task_ids: str):
             for tid in list(pending):
                 status = redis_client.get(f"{tid}:status")
                 if not status:
-                    event_data = {"task_id": tid, "status": "not_found"}
+                    raster_path = os.path.join(RASTER_DIR, f"{tid}.tif")
+                    resolved_status = "completed" if os.path.exists(raster_path) else "not_found"
+                    event_data = {"task_id": tid, "status": resolved_status}
                     yield f"data: {json.dumps(event_data)}\n\n"
                     pending.discard(tid)
                     continue

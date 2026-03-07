@@ -5,7 +5,9 @@ Workers create Splat and Redis instances lazily after fork
 to avoid sharing connections across processes.
 """
 
+import json
 import logging
+import os
 import redis
 from app.celery_app import celery_app
 from app.models.CoveragePredictionRequest import CoveragePredictionRequest
@@ -53,6 +55,31 @@ def run_splat_task(self, task_id: str, request_dict: dict):
         r.setex(task_id, 3600, geotiff_data)
         r.setex(f"{task_id}:status", 3600, "completed")
         logger.info(f"[Celery] Task {task_id} completed successfully")
+
+        # Persist to disk and database for long-term storage (survives Redis TTL expiry)
+        try:
+            from app.database import SessionLocal, RASTER_DIR
+            from app.models.coverage_site import CoverageSite
+            os.makedirs(RASTER_DIR, exist_ok=True)
+            raster_path = os.path.join(RASTER_DIR, f"{task_id}.tif")
+            with open(raster_path, "wb") as f:
+                f.write(geotiff_data)
+            db = SessionLocal()
+            try:
+                existing = db.query(CoverageSite).filter(CoverageSite.task_id == task_id).first()
+                if not existing:
+                    site = CoverageSite(
+                        task_id=task_id,
+                        params=json.dumps(request_dict),
+                        raster_path=raster_path,
+                    )
+                    db.add(site)
+                    db.commit()
+            finally:
+                db.close()
+            logger.info(f"[Celery] Task {task_id} persisted to disk at {raster_path}")
+        except Exception as persist_err:
+            logger.warning(f"[Celery] Failed to persist task {task_id} to disk: {persist_err}")
     except Exception as e:
         logger.error(f"[Celery] Task {task_id} failed: {e}")
         r.setex(f"{task_id}:status", 3600, "failed")

@@ -15,7 +15,7 @@
         <span>
           {{ node.name }}
           <span
-            v-if="node.siteId"
+            v-if="node.siteId && sitesStore.localSites.some(s => s.taskId === node.siteId)"
             class="badge bg-success ms-1"
             title="Has SPLAT! coverage simulation"
           >RF</span>
@@ -34,6 +34,8 @@
 
 <script setup lang="ts">
 import { useNodesStore } from '../stores/nodesStore'
+import { useSitesStore } from '../stores/sitesStore'
 
 const nodesStore = useNodesStore()
+const sitesStore = useSitesStore()
 </script>

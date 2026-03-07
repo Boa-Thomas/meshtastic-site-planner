@@ -668,6 +668,9 @@ async function pollForCompletion(taskId: string): Promise<void> {
     await sleep(1000)
     const statusResponse = await fetch(`/status/${taskId}`)
     if (!statusResponse.ok) {
+      if (statusResponse.status === 404) {
+        throw new Error('Task expired — result not found (try re-running)')
+      }
       throw new Error(`Status check failed (${statusResponse.status})`)
     }
     const { status } = await statusResponse.json()

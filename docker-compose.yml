@@ -4,6 +4,7 @@ x-worker-base: &worker-base
     dockerfile: Dockerfile
   volumes:
     - splat-tile-cache:/app/.splat_tiles
+    - planner-data:/app/app/data
   environment:
     - HOME=/home/appuser
     - TERM=xterm
