@@ -25,13 +25,18 @@
 
       <div class="mb-2">
         <strong>Active Tasks</strong> ({{ data.active_tasks.length }})
-        <div v-for="task in data.active_tasks" :key="task.task_id" class="ms-2">
-          <span class="text-truncate d-inline-block" style="max-width: 120px;" :title="task.task_id">
-            {{ task.task_id.slice(0, 8) }}...
-          </span>
-          <span v-if="task.progress" class="text-info ms-1">
-            {{ stageLabel(task.progress.stage) }} {{ Math.round((task.progress.progress || 0) * 100) }}%
-          </span>
+        <div v-for="task in data.active_tasks" :key="task.task_id" class="ms-2 mt-1">
+          <div>
+            <span class="text-truncate d-inline-block" style="max-width: 120px;" :title="task.task_id">
+              {{ task.task_id.slice(0, 8) }}...
+            </span>
+            <span v-if="task.progress" class="text-info ms-1">
+              {{ stageLabel(task.progress.stage) }} {{ Math.round((task.progress.progress || 0) * 100) }}%
+            </span>
+          </div>
+          <div v-if="task.progress?.detail" class="text-warning ms-2" style="font-size: 0.7rem;">
+            {{ task.progress.detail }}
+          </div>
         </div>
         <div v-if="data.active_tasks.length === 0" class="text-muted ms-2">None</div>
       </div>
@@ -42,12 +47,14 @@
       </div>
     </div>
 
-    <div v-else-if="!error" class="text-muted small">Click Start to begin monitoring.</div>
+    <div v-else-if="!error" class="text-muted small">{{ polling ? 'Carregando...' : 'Clique Start para monitorar.' }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onUnmounted } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
+
+const props = withDefaults(defineProps<{ autoStart?: boolean }>(), { autoStart: false })
 
 interface DebugData {
   queues: { default: number; heavy: number }
@@ -89,17 +96,28 @@ async function fetchStatus() {
   }
 }
 
-function togglePolling() {
-  if (polling.value) {
-    if (intervalId) clearInterval(intervalId)
-    intervalId = null
-    polling.value = false
-  } else {
-    polling.value = true
-    fetchStatus()
-    intervalId = setInterval(fetchStatus, 5000)
-  }
+function startPolling() {
+  if (polling.value) return
+  polling.value = true
+  fetchStatus()
+  intervalId = setInterval(fetchStatus, 5000)
 }
+
+function stopPolling() {
+  if (intervalId) clearInterval(intervalId)
+  intervalId = null
+  polling.value = false
+}
+
+function togglePolling() {
+  polling.value ? stopPolling() : startPolling()
+}
+
+// Auto-start when parent signals simulation is running
+watch(() => props.autoStart, (val) => {
+  if (val) startPolling()
+  else stopPolling()
+}, { immediate: true })
 
 onUnmounted(() => {
   if (intervalId) clearInterval(intervalId)

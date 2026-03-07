@@ -58,11 +58,10 @@
                     <div v-if="taskProgressMap.size > 0" class="mt-2">
                       <div v-for="[taskId, tp] in taskProgressMap" :key="taskId" class="mb-1">
                         <div class="d-flex justify-content-between align-items-center">
-                          <span class="small text-truncate" style="max-width: 150px;" :title="tp.nodeName">{{ tp.nodeName }}</span>
-                          <span class="small text-muted">
-                            <template v-if="tp.status === 'completed'">Done</template>
-                            <template v-else-if="tp.status === 'failed'">Failed</template>
-                            <template v-else>{{ stageLabel(tp.stage) }}</template>
+                          <span class="small text-truncate" style="max-width: 120px;" :title="tp.nodeName">{{ tp.nodeName }}</span>
+                          <span class="small text-muted d-flex gap-1 align-items-center">
+                            <span>{{ taskStatusLabel(tp) }}</span>
+                            <span v-if="estimatedEta(tp)" class="text-info">{{ estimatedEta(tp) }}</span>
                           </span>
                         </div>
                         <div class="progress" style="height: 3px;">
@@ -72,8 +71,19 @@
                                  'bg-danger': tp.status === 'failed',
                                  'progress-bar-striped progress-bar-animated': tp.status === 'processing',
                                }"
-                               :style="{ width: (tp.status === 'completed' ? 100 : tp.status === 'failed' ? 100 : tp.progress * 100) + '%' }">
+                               :style="{ width: (tp.status === 'completed' ? 100 : tp.status === 'failed' ? 100 : displayProgress(tp) * 100) + '%' }">
                           </div>
+                        </div>
+                      </div>
+
+                      <!-- Inline system debug during simulation -->
+                      <div class="mt-2 border-top border-secondary pt-2">
+                        <button class="btn btn-link btn-sm text-muted p-0 small text-decoration-none"
+                                @click="togglePanel('debug-inline')">
+                          Sistema {{ openPanels.has('debug-inline') ? '▲' : '▼' }}
+                        </button>
+                        <div v-if="openPanels.has('debug-inline') || runAllState === 'running'">
+                          <DebugPanel :auto-start="runAllState === 'running'" />
                         </div>
                       </div>
                     </div>
@@ -185,18 +195,6 @@
                 </ul>
               </li>
 
-              <!-- 6. Debug -->
-              <li class="nav-item">
-                <a class="nav-link dropdown-toggle" href="#" role="button"
-                   @click.prevent="togglePanel('debug')"
-                   :aria-expanded="openPanels.has('debug')">Debug</a>
-                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('debug') }]"
-                    style="position:static">
-                  <li>
-                    <DebugPanel />
-                  </li>
-                </ul>
-              </li>
             </ul>
 
             <!-- Project & Export buttons -->
@@ -421,8 +419,36 @@ interface TaskProgress {
   stage: string
   progress: number
   status: 'queued' | 'processing' | 'completed' | 'failed'
+  startedAt?: number       // timestamp when first real progress arrived
+  splatStartedAt?: number  // timestamp when running_splat began
 }
 const taskProgressMap = ref<Map<string, TaskProgress>>(new Map())
+
+// Reactive clock for ETA calculation (ticks every second)
+const now = ref(Date.now())
+const _clockInterval = setInterval(() => { now.value = Date.now() }, 1000)
+onUnmounted(() => clearInterval(_clockInterval))
+
+const SPLAT_ESTIMATED_MS = 90_000 // estimated SPLAT! execution time
+
+function displayProgress(tp: TaskProgress): number {
+  if (tp.stage === 'running_splat' && tp.splatStartedAt) {
+    const elapsed = now.value - tp.splatStartedAt
+    const fraction = Math.min(elapsed / SPLAT_ESTIMATED_MS, 0.97)
+    return 0.40 + fraction * 0.48 // animates 40% → ~88% over ~90s
+  }
+  return tp.progress
+}
+
+function estimatedEta(tp: TaskProgress): string | null {
+  const dp = displayProgress(tp)
+  if (!tp.startedAt || dp <= 0.05 || tp.status !== 'processing') return null
+  const elapsed = now.value - tp.startedAt
+  const remaining = elapsed * (1 - dp) / dp
+  if (remaining < 5000) return null
+  const secs = Math.round(remaining / 1000)
+  return secs >= 60 ? `~${Math.floor(secs / 60)}m ${secs % 60}s` : `~${secs}s`
+}
 
 function stageLabel(stage: string): string {
   const labels: Record<string, string> = {
@@ -432,6 +458,14 @@ function stageLabel(stage: string): string {
     converting: 'Generating result...',
   }
   return labels[stage] ?? (stage || 'Queued...')
+}
+
+function taskStatusLabel(tp: TaskProgress): string {
+  if (tp.status === 'completed') return 'Done'
+  if (tp.status === 'failed') return 'Failed'
+  if (tp.status === 'queued') return 'Aguardando...'
+  if (tp.status === 'processing' && !tp.stage) return 'Iniciando...'
+  return stageLabel(tp.stage)
 }
 
 // Settings stale detection (only for RF-affecting params, not display)
@@ -863,6 +897,12 @@ async function onRunAllCoverage() {
           // Update progress map
           const tp = taskProgressMap.value.get(task_id)
           if (tp) {
+            if (progress !== undefined && progress > 0 && !tp.startedAt) {
+              tp.startedAt = Date.now()
+            }
+            if (stage === 'running_splat' && tp.stage !== 'running_splat') {
+              tp.splatStartedAt = Date.now()
+            }
             if (stage !== undefined) tp.stage = stage
             if (progress !== undefined) tp.progress = progress
             if (status === 'completed') tp.status = 'completed'
