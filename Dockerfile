@@ -65,7 +65,9 @@ RUN chmod +x /app/splat/splat \
     /app/splat/usgs2sdf
 
 # Create non-root user and set ownership
-RUN useradd -m appuser && chown -R appuser:appuser /app
+RUN mkdir -p /app/.splat_tiles && \
+    useradd -m appuser && \
+    chown -R appuser:appuser /app
 USER appuser
 ENV HOME="/home/appuser"
 
