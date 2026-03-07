@@ -1,7 +1,17 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useDesStore } from '../desStore'
 import { useNodesStore } from '../nodesStore'
+
+// Mock the API module so tests don't need a running backend
+vi.mock('../../services/api', () => ({
+  getNodes: vi.fn().mockResolvedValue([]),
+  createNode: vi.fn().mockImplementation((node: any) => Promise.resolve(node)),
+  updateNodeApi: vi.fn().mockImplementation((_id: string, updates: any) => Promise.resolve(updates)),
+  deleteNodeApi: vi.fn().mockResolvedValue(undefined),
+  deleteAllNodes: vi.fn().mockResolvedValue(undefined),
+  batchCreateNodes: vi.fn().mockImplementation((nodes: any[]) => Promise.resolve(nodes)),
+}))
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -12,11 +22,11 @@ import { useNodesStore } from '../nodesStore'
  * Placing them ~1.4 km apart ensures FSPL at 915 MHz is well within the
  * default LONG_FAST sensitivity of -136 dBm, so canHear = true for both.
  */
-function addTestNodes(nodesStore: ReturnType<typeof useNodesStore>) {
+async function addTestNodes(nodesStore: ReturnType<typeof useNodesStore>) {
   const node1 = nodesStore.createDefaultNode(-23.55, -46.63, 'Node A')
   const node2 = nodesStore.createDefaultNode(-23.56, -46.64, 'Node B')
-  nodesStore.addNode(node1)
-  nodesStore.addNode(node2)
+  await nodesStore.addNode(node1)
+  await nodesStore.addNode(node2)
 }
 
 describe('desStore', () => {
@@ -30,33 +40,33 @@ describe('desStore', () => {
   // ---------------------------------------------------------------------------
 
   describe('initialize', () => {
-    it('sets status to paused and creates the engine when >= 2 nodes exist', () => {
+    it('sets status to paused and creates the engine when >= 2 nodes exist', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
 
       expect(desStore.status).toBe('paused')
       expect(desStore.engine).not.toBeNull()
     })
 
-    it('computes links after initialization', () => {
+    it('computes links after initialization', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
 
       // 2 nodes → 2 directed links (A→B and B→A)
       expect(desStore.links.length).toBeGreaterThan(0)
     })
 
-    it('resets processedEvents and metrics on re-initialize', () => {
+    it('resets processedEvents and metrics on re-initialize', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
       desStore.runToCompletion()
@@ -69,13 +79,13 @@ describe('desStore', () => {
       expect(desStore.metrics.totalMessagesSent).toBe(0)
     })
 
-    it('does NOT create an engine when fewer than 2 nodes exist', () => {
+    it('does NOT create an engine when fewer than 2 nodes exist', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
       // Add only one node
       const node = nodesStore.createDefaultNode(-23.55, -46.63, 'Lone Node')
-      nodesStore.addNode(node)
+      await nodesStore.addNode(node)
 
       desStore.initialize()
 
@@ -94,11 +104,11 @@ describe('desStore', () => {
   // ---------------------------------------------------------------------------
 
   describe('sendBroadcast + step', () => {
-    it('step returns an event after sendBroadcast', () => {
+    it('step returns an event after sendBroadcast', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 
@@ -108,11 +118,11 @@ describe('desStore', () => {
       expect(event?.type).toBe('message_send')
     })
 
-    it('step appends the event to processedEvents', () => {
+    it('step appends the event to processedEvents', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 
@@ -121,11 +131,11 @@ describe('desStore', () => {
       expect(desStore.processedEvents.length).toBeGreaterThan(0)
     })
 
-    it('step updates currentEventIndex', () => {
+    it('step updates currentEventIndex', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 
@@ -134,11 +144,11 @@ describe('desStore', () => {
       expect(desStore.currentEventIndex).toBe(0)
     })
 
-    it('step returns undefined when the queue is empty', () => {
+    it('step returns undefined when the queue is empty', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
 
       // No broadcast sent — queue is empty
@@ -152,11 +162,11 @@ describe('desStore', () => {
   // ---------------------------------------------------------------------------
 
   describe('play + pause', () => {
-    it('play sets status to running', () => {
+    it('play sets status to running', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 
@@ -168,11 +178,11 @@ describe('desStore', () => {
       desStore.pause()
     })
 
-    it('pause sets status to paused', () => {
+    it('pause sets status to paused', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 
@@ -182,11 +192,11 @@ describe('desStore', () => {
       expect(desStore.status).toBe('paused')
     })
 
-    it('pause clears the animation timer', () => {
+    it('pause clears the animation timer', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 
@@ -202,11 +212,11 @@ describe('desStore', () => {
   // ---------------------------------------------------------------------------
 
   describe('runToCompletion', () => {
-    it('sets status to completed', () => {
+    it('sets status to completed', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 
@@ -215,11 +225,11 @@ describe('desStore', () => {
       expect(desStore.status).toBe('completed')
     })
 
-    it('populates processedEvents after running to completion', () => {
+    it('populates processedEvents after running to completion', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 
@@ -228,11 +238,11 @@ describe('desStore', () => {
       expect(desStore.processedEvents.length).toBeGreaterThan(0)
     })
 
-    it('sets currentEventIndex to the last event index', () => {
+    it('sets currentEventIndex to the last event index', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 
@@ -255,11 +265,11 @@ describe('desStore', () => {
   // ---------------------------------------------------------------------------
 
   describe('reset', () => {
-    it('sets status back to idle', () => {
+    it('sets status back to idle', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
       desStore.runToCompletion()
@@ -269,11 +279,11 @@ describe('desStore', () => {
       expect(desStore.status).toBe('idle')
     })
 
-    it('clears processedEvents after reset', () => {
+    it('clears processedEvents after reset', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
       desStore.runToCompletion()
@@ -284,11 +294,11 @@ describe('desStore', () => {
       expect(desStore.processedEvents).toHaveLength(0)
     })
 
-    it('resets currentEventIndex to -1', () => {
+    it('resets currentEventIndex to -1', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
       desStore.runToCompletion()
@@ -298,11 +308,11 @@ describe('desStore', () => {
       expect(desStore.currentEventIndex).toBe(-1)
     })
 
-    it('resets metrics to zero values', () => {
+    it('resets metrics to zero values', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
       desStore.runToCompletion()
@@ -320,11 +330,11 @@ describe('desStore', () => {
   // ---------------------------------------------------------------------------
 
   describe('metrics update after step', () => {
-    it('totalMessagesSent > 0 after stepping through a broadcast', () => {
+    it('totalMessagesSent > 0 after stepping through a broadcast', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 
@@ -338,11 +348,11 @@ describe('desStore', () => {
       expect(desStore.metrics.totalMessagesSent).toBeGreaterThan(0)
     })
 
-    it('metrics are updated after runToCompletion', () => {
+    it('metrics are updated after runToCompletion', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
       desStore.runToCompletion()
@@ -356,11 +366,11 @@ describe('desStore', () => {
   // ---------------------------------------------------------------------------
 
   describe('getters', () => {
-    it('eventCount returns the number of processed events', () => {
+    it('eventCount returns the number of processed events', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
       desStore.runToCompletion()
@@ -368,21 +378,21 @@ describe('desStore', () => {
       expect(desStore.eventCount).toBe(desStore.processedEvents.length)
     })
 
-    it('currentEvent returns undefined before any steps', () => {
+    it('currentEvent returns undefined before any steps', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
 
       expect(desStore.currentEvent).toBeUndefined()
     })
 
-    it('currentEvent returns the last processed event after stepping', () => {
+    it('currentEvent returns the last processed event after stepping', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 
@@ -392,21 +402,21 @@ describe('desStore', () => {
       expect(desStore.currentEvent?.id).toBe(event?.id)
     })
 
-    it('hasPendingEvents is false before any messages are queued', () => {
+    it('hasPendingEvents is false before any messages are queued', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
 
       expect(desStore.hasPendingEvents).toBe(false)
     })
 
-    it('hasPendingEvents is true after sending a broadcast', () => {
+    it('hasPendingEvents is true after sending a broadcast', async () => {
       const nodesStore = useNodesStore()
       const desStore = useDesStore()
 
-      addTestNodes(nodesStore)
+      await addTestNodes(nodesStore)
       desStore.initialize()
       desStore.sendBroadcast(nodesStore.nodes[0].id)
 

@@ -13,6 +13,7 @@ export default defineConfig({
         target: 'http://localhost:8080/',
         headers: { 'X-Accel-Buffering': 'no' },
       },
+      '/api': 'http://localhost:8080/',
     },
   },
   build: {

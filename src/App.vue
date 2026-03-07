@@ -346,7 +346,10 @@ onUnmounted(() => {
 })
 
 // Initialize the map (moved from Transmitter.vue)
-onMounted(() => {
+onMounted(async () => {
+  // Load nodes from server before initializing the map
+  await nodesStore.initialize()
+
   const mapEl = document.getElementById('map') as HTMLElement
   let center: [number, number] = [-26.82, -49.27]
   if (nodesStore.nodes.length > 0) {

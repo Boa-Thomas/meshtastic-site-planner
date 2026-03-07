@@ -8,58 +8,12 @@ import { cloneObject } from '../utils'
 import { useMapStore } from './mapStore'
 import { colormapLookup } from '../utils/colormaps'
 import type { SharedSettings } from '../utils/nodeToSplatParams'
-
-// ---------------------------------------------------------------------------
-// IndexedDB helpers (module-level, no Vue dependency)
-// ---------------------------------------------------------------------------
-
-const DB_NAME = 'meshtastic-planner'
-const STORE_NAME = 'splat-coverage'
-const DB_VERSION = 1
-
-function openCoverageDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION)
-    request.onupgradeneeded = () => {
-      const db = request.result
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'taskId' })
-      }
-    }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-}
-
-async function saveSiteToDb(taskId: string, params: SplatParams, rasterBuffer: ArrayBuffer): Promise<void> {
-  const db = await openCoverageDb()
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite')
-    tx.objectStore(STORE_NAME).put({ taskId, params, rasterBuffer })
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error)
-  })
-}
-
-async function deleteSiteFromDb(taskId: string): Promise<void> {
-  const db = await openCoverageDb()
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite')
-    tx.objectStore(STORE_NAME).delete(taskId)
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error)
-  })
-}
-
-async function loadAllSitesFromDb(): Promise<Array<{ taskId: string; params: SplatParams; rasterBuffer: ArrayBuffer }>> {
-  const db = await openCoverageDb()
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly')
-    const request = tx.objectStore(STORE_NAME).getAll()
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-}
+import {
+  getSites,
+  getSiteRaster,
+  deleteSiteApi,
+  deleteAllSites as apiDeleteAllSites,
+} from '../services/api'
 
 // ---------------------------------------------------------------------------
 // Store
@@ -109,40 +63,41 @@ export const useSitesStore = defineStore('sites', {
         isPreview,
       })
       this.redrawSites()
-      if (!isPreview) {
-        saveSiteToDb(taskId, cloneObject(params), arrayBuffer).catch((err) =>
-          console.warn('[IndexedDB] Failed to save site:', err),
-        )
-      }
+      // Server-side persistence is handled by run_splat() in the backend.
+      // No need to upload the raster — it's already saved on the server.
     },
 
     // -----------------------------------------------------------------------
     // Remove
     // -----------------------------------------------------------------------
 
-    removeAllSites() {
+    async removeAllSites() {
       const mapStore = useMapStore()
       for (const site of this.localSites) {
         if (site.rasterLayer && mapStore.map) {
           mapStore.map.removeLayer(site.rasterLayer)
         }
-        deleteSiteFromDb(site.taskId).catch(err =>
-          console.warn('[IndexedDB] Failed to delete site:', err)
-        )
+      }
+      try {
+        await apiDeleteAllSites()
+      } catch (err) {
+        console.warn('[SitesStore] Failed to delete all sites from server:', err)
       }
       this.localSites = []
     },
 
-    removeSite(index: number) {
+    async removeSite(index: number) {
       const mapStore = useMapStore()
       if (!mapStore.map) return
       const site = this.localSites[index]
       if (site.rasterLayer) {
         mapStore.map.removeLayer(site.rasterLayer)
       }
-      deleteSiteFromDb(site.taskId).catch((err) =>
-        console.warn('[IndexedDB] Failed to delete site:', err),
-      )
+      try {
+        await deleteSiteApi(site.taskId)
+      } catch (err) {
+        console.warn('[SitesStore] Failed to delete site from server:', err)
+      }
       this.localSites.splice(index, 1)
     },
 
@@ -262,30 +217,38 @@ export const useSitesStore = defineStore('sites', {
     },
 
     // -----------------------------------------------------------------------
-    // Restore from IndexedDB (called on map init)
+    // Restore from server (called on map init)
     // -----------------------------------------------------------------------
 
-    async restoreFromIndexedDB() {
+    async restoreFromServer() {
       try {
-        const records = await loadAllSitesFromDb()
+        const serverSites = await getSites()
         const existingTaskIds = new Set(this.localSites.map((s) => s.taskId))
 
-        for (const record of records) {
-          if (existingTaskIds.has(record.taskId)) continue
-          const copy = record.rasterBuffer.slice(0)
-          const geoRaster = await parseGeoraster(copy)
-          this.localSites.push({
-            params: record.params,
-            taskId: record.taskId,
-            raster: markRaw(geoRaster),
-            visible: true,
-            rasterData: record.rasterBuffer,
-          })
+        for (const meta of serverSites) {
+          if (existingTaskIds.has(meta.taskId)) continue
+          try {
+            const rasterBuffer = await getSiteRaster(meta.taskId)
+            const copy = rasterBuffer.slice(0)
+            const geoRaster = await parseGeoraster(copy)
+            const params: SplatParams = typeof meta.params === 'string'
+              ? JSON.parse(meta.params)
+              : meta.params
+            this.localSites.push({
+              params,
+              taskId: meta.taskId,
+              raster: markRaw(geoRaster),
+              visible: true,
+              rasterData: rasterBuffer,
+            })
+          } catch (err) {
+            console.warn(`[SitesStore] Failed to restore site ${meta.taskId}:`, err)
+          }
         }
 
         this.redrawSites()
       } catch (err) {
-        console.warn('[IndexedDB] Failed to restore sites:', err)
+        console.warn('[SitesStore] Failed to restore sites from server:', err)
         // Fallback: just redraw whatever is in memory
         this.redrawSites()
       }
