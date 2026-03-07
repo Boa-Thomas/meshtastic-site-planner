@@ -14,12 +14,13 @@ class PropagationEngine(ABC):
         ...
 
     @abstractmethod
-    def coverage_prediction(self, request: CoveragePredictionRequest) -> bytes:
+    def coverage_prediction(self, request: CoveragePredictionRequest, *, task_id: str | None = None) -> bytes:
         """
         Execute a coverage prediction.
 
         Args:
             request: The coverage prediction parameters.
+            task_id: Optional task ID for progress reporting via Redis.
 
         Returns:
             GeoTIFF data as bytes.

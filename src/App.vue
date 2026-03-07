@@ -54,6 +54,30 @@
                       {{ runAllState === 'running' ? `Coverage ${runAllProgress.current}/${runAllProgress.total}...` : 'Run All Coverage' }}
                     </button>
 
+                    <!-- Per-task progress during Run All -->
+                    <div v-if="taskProgressMap.size > 0" class="mt-2">
+                      <div v-for="[taskId, tp] in taskProgressMap" :key="taskId" class="mb-1">
+                        <div class="d-flex justify-content-between align-items-center">
+                          <span class="small text-truncate" style="max-width: 150px;" :title="tp.nodeName">{{ tp.nodeName }}</span>
+                          <span class="small text-muted">
+                            <template v-if="tp.status === 'completed'">Done</template>
+                            <template v-else-if="tp.status === 'failed'">Failed</template>
+                            <template v-else>{{ stageLabel(tp.stage) }}</template>
+                          </span>
+                        </div>
+                        <div class="progress" style="height: 3px;">
+                          <div class="progress-bar"
+                               :class="{
+                                 'bg-success': tp.status === 'completed',
+                                 'bg-danger': tp.status === 'failed',
+                                 'progress-bar-striped progress-bar-animated': tp.status === 'processing',
+                               }"
+                               :style="{ width: (tp.status === 'completed' ? 100 : tp.status === 'failed' ? 100 : tp.progress * 100) + '%' }">
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
                     <!-- Coverage overlays list -->
                     <div v-if="sitesStore.localSites.length > 0" class="mt-2">
                       <div class="d-flex gap-1 mb-2">
@@ -160,6 +184,19 @@
                   </li>
                 </ul>
               </li>
+
+              <!-- 6. Debug -->
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('debug')"
+                   :aria-expanded="openPanels.has('debug')">Debug</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('debug') }]"
+                    style="position:static">
+                  <li>
+                    <DebugPanel />
+                  </li>
+                </ul>
+              </li>
             </ul>
 
             <!-- Project & Export buttons -->
@@ -221,6 +258,7 @@ import DesLinkOverlay from "./components/des/DesLinkOverlay.vue"
 import DesTraceroute from "./components/des/DesTraceroute.vue"
 import DesMetrics from "./components/des/DesMetrics.vue"
 import DesEventLog from "./components/des/DesEventLog.vue"
+import DebugPanel from "./components/DebugPanel.vue"
 
 import { useSitesStore } from './stores/sitesStore'
 import { useMapStore } from './stores/mapStore'
@@ -376,6 +414,25 @@ const nodeMarkers = new Map<string, L.Marker>()
 const runAllState = ref<'idle' | 'running'>('idle')
 const runAllProgress = ref({ current: 0, total: 0 })
 const runAllErrors = ref<string[]>([])
+
+// Per-task progress tracking (populated by SSE events)
+interface TaskProgress {
+  nodeName: string
+  stage: string
+  progress: number
+  status: 'queued' | 'processing' | 'completed' | 'failed'
+}
+const taskProgressMap = ref<Map<string, TaskProgress>>(new Map())
+
+function stageLabel(stage: string): string {
+  const labels: Record<string, string> = {
+    downloading_tiles: 'Downloading terrain...',
+    configuring: 'Configuring model...',
+    running_splat: 'Running simulation...',
+    converting: 'Generating result...',
+  }
+  return labels[stage] ?? (stage || 'Queued...')
+}
 
 // Settings stale detection (only for RF-affecting params, not display)
 const settingsStale = ref(false)
@@ -719,41 +776,161 @@ function onResetAllCoverage() {
   nodesStore.clearAllSiteIds()
 }
 
-// --- Run All Coverage ---
+// --- Run All Coverage (Parallel Batch Submission) ---
 
 async function onRunAllCoverage() {
   runAllErrors.value = []
-  const nodeIds = nodesStore.nodes.map(n => n.id)
-  if (nodeIds.length === 0) return
+  taskProgressMap.value.clear()
+  const nodes = nodesStore.nodes
+  if (nodes.length === 0) return
 
   runAllState.value = 'running'
-  runAllProgress.value = { current: 0, total: nodeIds.length }
-
-  const BATCH_SIZE = 2 // Safe with rate limit 5/min since each run takes >30s
+  runAllProgress.value = { current: 0, total: nodes.length }
 
   try {
-    for (let i = 0; i < nodeIds.length; i += BATCH_SIZE) {
-      const batch = nodeIds.slice(i, i + BATCH_SIZE)
-      const results = await Promise.allSettled(
-        batch.map(async (nodeId) => {
-          await onRunNodeCoverage(nodeId, true)
-          runAllProgress.value.current++
-        })
-      )
-      for (const result of results) {
-        if (result.status === 'rejected') {
-          const batchIndex = results.indexOf(result)
-          const failedId = batch[batchIndex]
-          const name = nodesStore.nodeById(failedId)?.name ?? failedId
-          const err = result.reason
+    const fullRadiusM = sitesStore.splatParams.simulation.simulation_extent * 1000
+    const highRes = sitesStore.splatParams.simulation.high_resolution
+
+    // 1. Build all payloads and cleanup previous coverage
+    const nodePayloads: { nodeId: string; splatParams: ReturnType<typeof nodeToSplatParams>; payload: Record<string, unknown> }[] = []
+    for (const node of nodes) {
+      if (node.siteId) {
+        const oldIndex = sitesStore.localSites.findIndex(s => s.taskId === node.siteId)
+        if (oldIndex >= 0) sitesStore.removeSite(oldIndex)
+        nodesStore.updateNode(node.id, { siteId: undefined })
+      }
+      const { splatParams, payload } = buildPayload(node, fullRadiusM, highRes)
+      nodePayloads.push({ nodeId: node.id, splatParams, payload })
+    }
+
+    // 2. Submit all predictions in one batch
+    const batchResponse = await fetch('/predict/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(nodePayloads.map(np => np.payload)),
+    })
+    if (!batchResponse.ok) {
+      const detail = await batchResponse.text()
+      throw new Error(`Batch submit failed (${batchResponse.status}): ${detail}`)
+    }
+    const { tasks } = await batchResponse.json() as { tasks: { task_id: string; cached: boolean }[] }
+
+    // 3. Map task_ids to node info
+    const taskToNode = new Map<string, { nodeId: string; nodeName: string; splatParams: ReturnType<typeof nodeToSplatParams> }>()
+    for (let i = 0; i < tasks.length; i++) {
+      const np = nodePayloads[i]
+      const node = nodesStore.nodeById(np.nodeId)
+      const name = node?.name ?? np.nodeId
+      taskToNode.set(tasks[i].task_id, { nodeId: np.nodeId, nodeName: name, splatParams: np.splatParams })
+      taskProgressMap.value.set(tasks[i].task_id, {
+        nodeName: name,
+        stage: '',
+        progress: 0,
+        status: tasks[i].cached ? 'processing' : 'queued',
+      })
+    }
+
+    // 4. Open multi-task SSE stream and display results incrementally
+    const allTaskIds = tasks.map(t => t.task_id)
+    const pending = new Set(allTaskIds)
+
+    await new Promise<void>((resolve, reject) => {
+      const handleCompleted = async (taskId: string) => {
+        try {
+          const resultResponse = await fetch(`/result/${taskId}`)
+          if (!resultResponse.ok) throw new Error(`Result fetch failed (${resultResponse.status})`)
+          const arrayBuffer = await resultResponse.arrayBuffer()
+
+          const entry = taskToNode.get(taskId)
+          if (entry) {
+            await sitesStore.addSiteFromBuffer(taskId, arrayBuffer, entry.splatParams)
+            nodesStore.updateNode(entry.nodeId, { siteId: taskId })
+          }
+        } catch (err) {
+          const entry = taskToNode.get(taskId)
+          const name = entry?.nodeName ?? taskId
           runAllErrors.value.push(`"${name}": ${err instanceof Error ? err.message : String(err)}`)
         }
       }
-    }
+
+      try {
+        const es = new EventSource(`/events/multi?task_ids=${allTaskIds.join(',')}`)
+
+        es.onmessage = async (event) => {
+          const data = JSON.parse(event.data)
+          const { task_id, status, stage, progress } = data
+
+          // Update progress map
+          const tp = taskProgressMap.value.get(task_id)
+          if (tp) {
+            if (stage !== undefined) tp.stage = stage
+            if (progress !== undefined) tp.progress = progress
+            if (status === 'completed') tp.status = 'completed'
+            else if (status === 'failed') tp.status = 'failed'
+            else if (status === 'processing') tp.status = 'processing'
+          }
+
+          if (status === 'completed' && pending.has(task_id)) {
+            pending.delete(task_id)
+            runAllProgress.value.current++
+            await handleCompleted(task_id)
+          } else if ((status === 'failed' || status === 'not_found') && pending.has(task_id)) {
+            pending.delete(task_id)
+            runAllProgress.value.current++
+            const entry = taskToNode.get(task_id)
+            const name = entry?.nodeName ?? task_id
+            runAllErrors.value.push(`"${name}": simulation ${status}`)
+            if (tp) tp.status = 'failed'
+          }
+
+          if (pending.size === 0) {
+            es.close()
+            resolve()
+          }
+        }
+
+        es.onerror = () => {
+          es.close()
+          console.warn('[SSE Multi] Connection failed, falling back to individual polling')
+          pollRemainingTasks(pending, taskToNode, handleCompleted).then(resolve, reject)
+        }
+      } catch {
+        pollRemainingTasks(pending, taskToNode, handleCompleted).then(resolve, reject)
+      }
+    })
   } finally {
     runAllState.value = 'idle'
     settingsStale.value = false
+    // Clear progress map after a brief delay so the user sees final state
+    setTimeout(() => taskProgressMap.value.clear(), 2000)
   }
+}
+
+/** Fallback: poll remaining tasks individually when SSE fails. */
+async function pollRemainingTasks(
+  pending: Set<string>,
+  taskToNode: Map<string, { nodeId: string; nodeName: string; splatParams: ReturnType<typeof nodeToSplatParams> }>,
+  handleCompleted: (taskId: string) => Promise<void>,
+) {
+  const promises = [...pending].map(async (taskId) => {
+    try {
+      await pollForCompletion(taskId)
+      pending.delete(taskId)
+      runAllProgress.value.current++
+      await handleCompleted(taskId)
+      const tp = taskProgressMap.value.get(taskId)
+      if (tp) tp.status = 'completed'
+    } catch (err) {
+      pending.delete(taskId)
+      runAllProgress.value.current++
+      const entry = taskToNode.get(taskId)
+      const name = entry?.nodeName ?? taskId
+      runAllErrors.value.push(`"${name}": ${err instanceof Error ? err.message : String(err)}`)
+      const tp = taskProgressMap.value.get(taskId)
+      if (tp) tp.status = 'failed'
+    }
+  })
+  await Promise.allSettled(promises)
 }
 </script>
 
