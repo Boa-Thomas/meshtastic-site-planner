@@ -118,11 +118,11 @@ class CoveragePredictionRequest(BaseModel):
         description="Propagation model for Signal Server (e.g., 'itm', 'hata', 'cost231', 'itwom'). Ignored for SPLAT!.",
     )
 
-    def rf_param_hash(self) -> str:
-        """SHA-256 hash of RF-significant parameters (excludes display-only params like colormap)."""
-        significant = {
-            "lat": round(self.lat, 6),
-            "lon": round(self.lon, 6),
+    def _rf_significant_params(self, lat: float, lon: float) -> dict:
+        """Return the dict of RF-significant params using the supplied lat/lon."""
+        return {
+            "lat": lat,
+            "lon": lon,
             "tx_height": round(self.tx_height, 2),
             "tx_power": round(self.tx_power, 2),
             "tx_gain": round(self.tx_gain, 2),
@@ -144,4 +144,33 @@ class CoveragePredictionRequest(BaseModel):
             "engine": self.engine,
             "propagation_model": self.propagation_model,
         }
+
+    def rf_param_hash(self) -> str:
+        """SHA-256 hash of RF-significant parameters (excludes display-only params like colormap)."""
+        significant = self._rf_significant_params(round(self.lat, 6), round(self.lon, 6))
         return hashlib.sha256(json.dumps(significant, sort_keys=True).encode()).hexdigest()[:16]
+
+    def rf_neighborhood_hashes(self, grid_deg: float = 0.0005) -> list[str]:
+        """
+        Hashes for this request's grid cell plus the 8 neighbors.
+
+        grid_deg = 0.0005 ≈ 55m. Two requests within `grid_deg` of each other
+        (and identical RF params) will share at least one neighborhood hash.
+
+        Returned in proximity order (center first), so callers can iterate and
+        accept the first cache hit.
+        """
+        if grid_deg <= 0:
+            return []
+        gx = round(self.lon / grid_deg) * grid_deg
+        gy = round(self.lat / grid_deg) * grid_deg
+        deltas = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1),
+                  (1, 1), (-1, 1), (1, -1), (-1, -1)]
+        hashes = []
+        for dx, dy in deltas:
+            cx = round(gx + dx * grid_deg, 6)
+            cy = round(gy + dy * grid_deg, 6)
+            payload = self._rf_significant_params(cy, cx)
+            digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+            hashes.append(digest)
+        return hashes

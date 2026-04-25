@@ -8,34 +8,9 @@ import type { PathLossProfileId } from '../des/types'
 import type { MeshNode, ChannelPreset, Site } from '../types/index'
 import { channelPresets } from '../data/channelPresets'
 import { useNodesStore } from './nodesStore'
-import { lookupRasterRssi } from '../utils/rasterLookup'
+import { buildRssiOverrideMapAsync } from '../utils/rssiWorkerClient'
 
 export type DesStatus = 'idle' | 'running' | 'paused' | 'completed'
-
-/**
- * Build an RSSI override map from SPLAT! raster data.
- * For each TX node that has a coverage raster (via siteId), lookup the RSSI
- * at every other node's position and add it to the override map.
- */
-function buildRssiOverrideMap(nodes: MeshNode[], sites: Site[]): RssiOverrideMap {
-  const overrides: RssiOverrideMap = new Map()
-  for (const txNode of nodes) {
-    if (!txNode.siteId) continue
-    const site = sites.find((s) => s.taskId === txNode.siteId)
-    if (!site || !site.raster) continue
-
-    const display = site.params.display
-
-    for (const rxNode of nodes) {
-      if (rxNode.id === txNode.id) continue
-      const rssi = lookupRasterRssi(site.raster, display, rxNode.lat, rxNode.lon)
-      if (rssi !== null) {
-        overrides.set(`${txNode.id}->${rxNode.id}`, rssi)
-      }
-    }
-  }
-  return overrides
-}
 
 export const useDesStore = defineStore('des', {
   state: () => ({
@@ -68,7 +43,7 @@ export const useDesStore = defineStore('des', {
      * Initialize the DES engine with the current nodes and config.
      * Must be called before any simulation actions.
      */
-    initialize(channelPresetOverride?: ChannelPreset, sites?: Site[]) {
+    async initialize(channelPresetOverride?: ChannelPreset, sites?: Site[]) {
       const nodesStore = useNodesStore()
       if (nodesStore.nodes.length < 2) return
 
@@ -84,8 +59,9 @@ export const useDesStore = defineStore('des', {
         this.config.pathLossConfig = profile.config
       }
 
-      // Build RSSI overrides from SPLAT! raster data (if available)
-      const rssiOverrides = buildRssiOverrideMap(
+      // Build RSSI overrides from SPLAT! raster data (if available).
+      // Off-loads to a Web Worker when the mesh is large enough to benefit.
+      const rssiOverrides = await buildRssiOverrideMapAsync(
         nodesStore.nodes as MeshNode[],
         sites ?? [],
       )

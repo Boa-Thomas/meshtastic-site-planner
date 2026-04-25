@@ -31,6 +31,13 @@ from app.routers import nodes as nodes_router
 from app.routers import sites as sites_router
 from app.routers import projects as projects_router
 from app.routers import debug as debug_router
+from app.metrics import (
+    inc,
+    measure,
+    result_cache_hits_total,
+    setup_instrumentator,
+    simulation_duration_seconds,
+)
 import logging
 import io
 import time
@@ -47,6 +54,9 @@ redis_client = get_redis_client()
 
 # Initialize FastAPI app
 app = FastAPI()
+
+# Prometheus instrumentation (no-op if dependency unavailable)
+setup_instrumentator(app)
 
 # Rate limiter (per-IP, using remote address)
 limiter = Limiter(key_func=get_remote_address)
@@ -92,10 +102,13 @@ def run_splat(task_id: str, request: CoveragePredictionRequest):
     Raises:
         Exception: If SPLAT! fails during execution.
     """
+    sim_status = "failed"
+    sim_start = time.perf_counter()
     try:
         logger.info(f"Starting coverage prediction for task {task_id}.")
         engine = get_engine(request.engine)
         geotiff_data = engine.coverage_prediction(request, task_id=task_id)
+        sim_status = "success"
 
         # Log before storing in Redis
         logger.info(f"Storing result in Redis for task {task_id}")
@@ -128,6 +141,14 @@ def run_splat(task_id: str, request: CoveragePredictionRequest):
         redis_client.setex(f"{task_id}:status", 3600, "failed")
         redis_client.setex(f"{task_id}:error", 3600, str(e))
         raise
+    finally:
+        if simulation_duration_seconds is not None:
+            try:
+                simulation_duration_seconds.labels(
+                    status=sim_status, queue="inline"
+                ).observe(time.perf_counter() - sim_start)
+            except Exception:
+                pass
 
 def _dispatch_prediction(payload: CoveragePredictionRequest, background_tasks: BackgroundTasks | None = None) -> dict:
     """
@@ -143,11 +164,35 @@ def _dispatch_prediction(payload: CoveragePredictionRequest, background_tasks: B
         cached_status = redis_client.get(f"{cached_task_id}:status")
         if cached_status and cached_status.decode("utf-8") in ("completed", "processing"):
             logger.info(f"RF cache hit for hash {rf_hash}, returning task {cached_task_id}")
+            inc(result_cache_hits_total, strategy="rf_hash")
             return {"task_id": cached_task_id, "cached": True}
+
+    # Bbox-aware fuzzy lookup: identical RF params within RF_BBOX_TOLERANCE_DEG of
+    # an existing simulation reuse it. Disabled by setting tolerance to 0.
+    bbox_tolerance = float(os.environ.get("RF_BBOX_TOLERANCE_DEG", "0.0005"))
+    if bbox_tolerance > 0:
+        for nbr_hash in payload.rf_neighborhood_hashes(bbox_tolerance):
+            if nbr_hash == rf_hash:
+                continue
+            nbr_task_id = redis_client.get(f"rfbbox:{nbr_hash}")
+            if not nbr_task_id:
+                continue
+            nbr_task_id = nbr_task_id.decode("utf-8")
+            nbr_status = redis_client.get(f"{nbr_task_id}:status")
+            if nbr_status and nbr_status.decode("utf-8") in ("completed", "processing"):
+                logger.info(
+                    f"Bbox cache hit (~{bbox_tolerance:g}°) for {rf_hash} -> task {nbr_task_id}"
+                )
+                inc(result_cache_hits_total, strategy="bbox")
+                return {"task_id": nbr_task_id, "cached": True}
 
     task_id = str(uuid4())
     redis_client.setex(f"{task_id}:status", 3600, "processing")
     redis_client.setex(f"rfcache:{rf_hash}", 3600, task_id)
+    if bbox_tolerance > 0:
+        # Index by the center neighborhood hash for future fuzzy lookups
+        center_hash = payload.rf_neighborhood_hashes(bbox_tolerance)[0]
+        redis_client.setex(f"rfbbox:{center_hash}", 3600, task_id)
     if USE_CELERY:
         from app.tasks import run_splat_task
         heavy_threshold = int(os.environ.get("HEAVY_RADIUS_THRESHOLD_KM", "200")) * 1000

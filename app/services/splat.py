@@ -5,6 +5,7 @@ import os
 import io
 import subprocess
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from typing import Literal, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,11 @@ from app.models.CoveragePredictionRequest import CoveragePredictionRequest
 from app.services.engine import PropagationEngine
 from app.services.geotiff_utils import ppm_kml_to_geotiff
 from app.redis_config import DB_SRTM_CACHE, get_redis_client
+from app.metrics import (
+    inc,
+    splat_subprocess_duration_seconds,
+    srtm_cache_events_total,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -195,24 +201,57 @@ class Splat(PropagationEngine):
 
                 self._report_progress(task_id, "downloading_tiles", 0.05, f"0/{total_tiles} tiles")
 
-                # download and convert terrain tiles to SPLAT! sdf (parallel)
-                max_workers = min(len(required_tiles), 8)
-                completed_tiles = 0
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    futures = {
-                        executor.submit(
-                            self._download_and_convert_tile,
-                            tile_name, sdf_name, sdf_hd_name,
-                            request.high_resolution, tmpdir
-                        ): tile_name
+                # Two-phase pipeline:
+                #   Phase 1: download all HGT tiles in parallel (I/O-bound; high
+                #            concurrency works well against S3).
+                #   Phase 2: convert HGT -> SDF in parallel (CPU-bound; cap at
+                #            cpu_count to avoid GIL/disk thrashing).
+                # When tiles are already cached the I/O phase is near-zero; when
+                # SDFs are cached the CPU phase is near-zero. Splitting also makes
+                # progress reporting more accurate.
+                cpu_count = max(1, (os.cpu_count() or 4))
+                download_workers = min(len(required_tiles),
+                                       int(os.environ.get("SPLAT_DOWNLOAD_WORKERS", "16")))
+                convert_workers = min(len(required_tiles),
+                                      int(os.environ.get("SPLAT_CONVERT_WORKERS", str(cpu_count))))
+
+                completed = 0
+                with ThreadPoolExecutor(max_workers=download_workers) as dl_pool:
+                    download_futures = {
+                        dl_pool.submit(self._download_terrain_tile, tile_name): (
+                            tile_name, sdf_name, sdf_hd_name
+                        )
                         for tile_name, sdf_name, sdf_hd_name in required_tiles
                     }
-                    for future in as_completed(futures):
-                        future.result()  # Propagate exceptions
-                        completed_tiles += 1
-                        tile_progress = 0.05 + (completed_tiles / total_tiles) * 0.25
-                        self._report_progress(task_id, "downloading_tiles", tile_progress,
-                                              f"{completed_tiles}/{total_tiles} tiles")
+                    downloaded: list[tuple[bytes, str, str, str]] = []
+                    for future in as_completed(download_futures):
+                        tile_name, sdf_name, sdf_hd_name = download_futures[future]
+                        downloaded.append((future.result(), tile_name, sdf_name, sdf_hd_name))
+                        completed += 1
+                        # I/O accounts for ~12% of the [0.05, 0.30] window.
+                        self._report_progress(task_id, "downloading_tiles",
+                                              0.05 + (completed / total_tiles) * 0.12,
+                                              f"{completed}/{total_tiles} downloaded")
+
+                self._report_progress(task_id, "converting_tiles", 0.17,
+                                      f"0/{total_tiles} converted")
+
+                completed = 0
+                with ThreadPoolExecutor(max_workers=convert_workers) as conv_pool:
+                    convert_futures = {
+                        conv_pool.submit(
+                            self._convert_and_write_sdf,
+                            tile_data, tile_name, sdf_name, sdf_hd_name,
+                            request.high_resolution, tmpdir,
+                        ): tile_name
+                        for tile_data, tile_name, sdf_name, sdf_hd_name in downloaded
+                    }
+                    for future in as_completed(convert_futures):
+                        future.result()
+                        completed += 1
+                        self._report_progress(task_id, "converting_tiles",
+                                              0.17 + (completed / total_tiles) * 0.13,
+                                              f"{completed}/{total_tiles} converted")
 
                 self._report_progress(task_id, "configuring", 0.35, "Writing model parameters")
 
@@ -271,6 +310,8 @@ class Splat(PropagationEngine):
                 ] # flag "olditm" uses the standard ITM model instead of ITWOM, which has produced unrealistic results.
                 logger.debug(f"Executing SPLAT! command: {' '.join(splat_command)}")
 
+                splat_binary_label = "splat-hd" if request.high_resolution else "splat"
+                splat_subprocess_start = time.perf_counter()
                 splat_result = subprocess.run(
                     splat_command,
                     cwd=tmpdir,
@@ -278,6 +319,13 @@ class Splat(PropagationEngine):
                     text=True,
                     check=False,
                 )
+                if splat_subprocess_duration_seconds is not None:
+                    try:
+                        splat_subprocess_duration_seconds.labels(
+                            binary=splat_binary_label
+                        ).observe(time.perf_counter() - splat_subprocess_start)
+                    except Exception:
+                        pass
 
                 logger.debug(f"SPLAT! stdout:\n{splat_result.stdout}")
                 logger.debug(f"SPLAT! stderr:\n{splat_result.stderr}")
@@ -310,8 +358,19 @@ class Splat(PropagationEngine):
 
     def _download_and_convert_tile(self, tile_name: str, sdf_name: str, sdf_hd_name: str,
                                     high_resolution: bool, tmpdir: str) -> None:
-        """Download a terrain tile, convert to SDF, and write to tmpdir."""
+        """Download a terrain tile, convert to SDF, and write to tmpdir.
+
+        Kept for backward compatibility; new code uses the two-phase pipeline
+        with _download_terrain_tile + _convert_and_write_sdf.
+        """
         tile_data = self._download_terrain_tile(tile_name)
+        self._convert_and_write_sdf(tile_data, tile_name, sdf_name, sdf_hd_name,
+                                    high_resolution, tmpdir)
+
+    def _convert_and_write_sdf(self, tile_data: bytes, tile_name: str,
+                               sdf_name: str, sdf_hd_name: str,
+                               high_resolution: bool, tmpdir: str) -> None:
+        """Convert a downloaded HGT to SDF and write it to tmpdir."""
         sdf_data = self._convert_hgt_to_sdf(tile_data, tile_name, high_resolution=high_resolution)
         target = sdf_hd_name if high_resolution else sdf_name
         with open(os.path.join(tmpdir, target), "wb") as f:
@@ -662,6 +721,7 @@ class Splat(PropagationEngine):
         """
         if tile_name in self.tile_cache:
             logger.info(f"Cache hit (disk): {tile_name}")
+            inc(srtm_cache_events_total, tier="disk", event="hit")
             return self.tile_cache[tile_name]
 
         redis_key = f"srtm:hgt:{tile_name}"
@@ -670,10 +730,13 @@ class Splat(PropagationEngine):
                 cached = self._redis_tile_cache.get(redis_key)
                 if cached:
                     logger.info(f"Cache hit (redis): {tile_name}")
+                    inc(srtm_cache_events_total, tier="redis", event="hit")
                     self.tile_cache[tile_name] = cached
                     return cached
             except Exception as e:
                 logger.debug(f"Redis HGT cache read failed for {tile_name}: {e}")
+
+        inc(srtm_cache_events_total, tier="s3", event="miss")
 
         # Download the tile from S3 if not in cache
         tile_dir_prefix = tile_name[:3]
@@ -742,8 +805,19 @@ class Splat(PropagationEngine):
 
         # Check cache for converted file
         if sdf_filename in self.tile_cache:
-            logger.info(f"Cache hit: {sdf_filename} found in the local cache.")
+            logger.info(f"Cache hit (disk): {sdf_filename}")
             return self.tile_cache[sdf_filename]
+
+        sdf_redis_key = f"srtm:sdf:{sdf_filename}"
+        if self._redis_tile_cache is not None:
+            try:
+                cached_sdf = self._redis_tile_cache.get(sdf_redis_key)
+                if cached_sdf:
+                    logger.info(f"Cache hit (redis): {sdf_filename}")
+                    self.tile_cache[sdf_filename] = cached_sdf
+                    return cached_sdf
+            except Exception as e:
+                logger.debug(f"Redis SDF cache read failed for {sdf_filename}: {e}")
 
         # Create temporary working directory
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -816,7 +890,7 @@ class Splat(PropagationEngine):
                 # Read and cache the .sdf file
                 with open(sdf_path, "rb") as sdf_file:
                     sdf_data = sdf_file.read()
-                self.tile_cache[sdf_filename] = sdf_data
+                self._cache_tile(sdf_filename, sdf_redis_key, sdf_data)
 
                 logger.info(f"Successfully converted and cached {sdf_filename}.")
                 return sdf_data

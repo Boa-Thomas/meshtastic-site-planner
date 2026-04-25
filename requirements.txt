@@ -58,3 +58,5 @@ celery[redis]==5.4.0
 flower==2.0.1
 docker==7.1.0
 python-multipart==0.0.20
+prometheus-client==0.21.1
+prometheus-fastapi-instrumentator==7.0.0
