@@ -13,8 +13,8 @@ Endpoints:
 import asyncio
 import json
 import os
-import redis
 from fastapi import FastAPI, BackgroundTasks
+from app.redis_config import get_redis_client
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 USE_CELERY = os.environ.get("USE_CELERY", "false").lower() == "true"
 
 # Initialize Redis client for binary data
-redis_client = redis.StrictRedis(host="redis", port=6379, decode_responses=False)
+redis_client = get_redis_client()
 
 # Initialize FastAPI app
 app = FastAPI()

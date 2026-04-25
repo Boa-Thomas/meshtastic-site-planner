@@ -13,13 +13,12 @@ import os
 from celery import Celery
 from kombu import Queue
 
-REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
-REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
+from app.redis_config import DB_CELERY_BACKEND, DB_CELERY_BROKER, redis_url
 
 celery_app = Celery(
     "meshtastic_planner",
-    broker=f"redis://{REDIS_HOST}:{REDIS_PORT}/1",
-    backend=f"redis://{REDIS_HOST}:{REDIS_PORT}/2",
+    broker=redis_url(DB_CELERY_BROKER),
+    backend=redis_url(DB_CELERY_BACKEND),
 )
 
 celery_app.conf.update(

@@ -26,9 +26,14 @@ from PIL import Image
 from app.models.CoveragePredictionRequest import CoveragePredictionRequest
 from app.services.engine import PropagationEngine
 from app.services.geotiff_utils import ppm_kml_to_geotiff
+from app.redis_config import DB_SRTM_CACHE, get_redis_client
 
 
 logger = logging.getLogger(__name__)
+
+# Redis HGT tile cache shared across workers; survives diskcache LRU eviction.
+# Set REDIS_SRTM_CACHE_TTL=0 to disable persistence-side caching.
+SRTM_REDIS_TTL = int(os.environ.get("REDIS_SRTM_CACHE_TTL", str(7 * 24 * 3600)))
 logging.getLogger("boto3").setLevel(logging.WARNING)
 logging.getLogger("botocore").setLevel(logging.WARNING)
 logging.getLogger("s3transfer").setLevel(logging.WARNING)
@@ -115,6 +120,13 @@ class Splat(PropagationEngine):
             cache_dir, size_limit=int(cache_size_gb * 1024 * 1024 * 1024)
         )
 
+        try:
+            self._redis_tile_cache = get_redis_client(db=DB_SRTM_CACHE)
+            self._redis_tile_cache.ping()
+        except Exception as e:
+            logger.warning(f"Redis SRTM tile cache unavailable, falling back to disk only: {e}")
+            self._redis_tile_cache = None
+
         self.s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
         self.bucket_name = bucket_name
         self.bucket_prefix = bucket_prefix
@@ -139,10 +151,7 @@ class Splat(PropagationEngine):
             return
         try:
             import json
-            import redis as _redis
-            host = os.environ.get("REDIS_HOST", "redis")
-            port = int(os.environ.get("REDIS_PORT", "6379"))
-            r = _redis.StrictRedis(host=host, port=port, decode_responses=False)
+            r = get_redis_client()
             r.setex(f"{task_id}:progress", 3600, json.dumps({
                 "stage": stage,
                 "progress": round(progress, 2),
@@ -652,8 +661,19 @@ class Splat(PropagationEngine):
             Exception: If the tile cannot be downloaded from S3.
         """
         if tile_name in self.tile_cache:
-            logger.info(f"Cache hit: {tile_name} found in the local cache.")
+            logger.info(f"Cache hit (disk): {tile_name}")
             return self.tile_cache[tile_name]
+
+        redis_key = f"srtm:hgt:{tile_name}"
+        if self._redis_tile_cache is not None:
+            try:
+                cached = self._redis_tile_cache.get(redis_key)
+                if cached:
+                    logger.info(f"Cache hit (redis): {tile_name}")
+                    self.tile_cache[tile_name] = cached
+                    return cached
+            except Exception as e:
+                logger.debug(f"Redis HGT cache read failed for {tile_name}: {e}")
 
         # Download the tile from S3 if not in cache
         tile_dir_prefix = tile_name[:3]
@@ -662,8 +682,7 @@ class Splat(PropagationEngine):
         try:
             obj = self.s3.get_object(Bucket=self.bucket_name, Key=s3_key)
             tile_data = obj['Body'].read()
-            # Store the tile in the cache
-            self.tile_cache[tile_name] = tile_data
+            self._cache_tile(tile_name, redis_key, tile_data)
             return tile_data
         except ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchKey':
@@ -671,8 +690,7 @@ class Splat(PropagationEngine):
                 s3_key = f"skadi/{tile_dir_prefix}/{tile_name}"
                 obj = self.s3.get_object(Bucket=self.bucket_name, Key=s3_key)
                 tile_data = obj['Body'].read()
-                # Store the tile in the cache
-                self.tile_cache[tile_name] = tile_data
+                self._cache_tile(tile_name, redis_key, tile_data)
                 return tile_data
             else:
                 logger.error(f"Failed to download {tile_name} from S3 due to ClientError: {e}")
@@ -680,6 +698,15 @@ class Splat(PropagationEngine):
         except Exception as e:
             logger.error(f"Failed to download {tile_name} from S3: {e}")
             raise
+
+    def _cache_tile(self, tile_name: str, redis_key: str, tile_data: bytes) -> None:
+        """Persist a downloaded tile to both diskcache and Redis (best-effort)."""
+        self.tile_cache[tile_name] = tile_data
+        if self._redis_tile_cache is not None and SRTM_REDIS_TTL > 0:
+            try:
+                self._redis_tile_cache.setex(redis_key, SRTM_REDIS_TTL, tile_data)
+            except Exception as e:
+                logger.debug(f"Redis HGT cache write failed for {tile_name}: {e}")
 
     @staticmethod
     def _hgt_filename_to_sdf_filename(hgt_filename: str, high_resolution: bool = False) -> str:

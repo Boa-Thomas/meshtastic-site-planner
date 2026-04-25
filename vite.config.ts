@@ -19,5 +19,14 @@ export default defineConfig({
   build: {
     outDir: 'app/ui',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-vue': ['vue', 'pinia'],
+          'vendor-leaflet': ['leaflet', 'georaster', 'georaster-layer-for-leaflet'],
+          'vendor-bootstrap': ['bootstrap'],
+        },
+      },
+    },
   },
 })
