@@ -45,19 +45,21 @@ class TestHgtFilenameToSdfFilename:
         self.Splat = Splat
 
     def test_northern_western_hemisphere_standard_resolution(self):
-        """N35W120.hgt.gz -> 35:36:120:121.sdf (Western hemisphere)."""
+        """N35W120.hgt.gz -> 35:36:119:120.sdf (matches srtm2sdf naming)."""
+        # srtm2sdf encodes the SW corner; for Western tiles the lower bound is
+        # one degree below the HGT label's longitude.
         result = self.Splat._hgt_filename_to_sdf_filename("N35W120.hgt.gz", high_resolution=False)
-        assert result == "35:36:120:121.sdf"
+        assert result == "35:36:119:120.sdf"
 
     def test_northern_western_hemisphere_high_resolution(self):
-        """N35W120.hgt.gz -> 35:36:120:121-hd.sdf in high-resolution mode."""
+        """N35W120.hgt.gz -> 35:36:119:120-hd.sdf in high-resolution mode."""
         result = self.Splat._hgt_filename_to_sdf_filename("N35W120.hgt.gz", high_resolution=True)
-        assert result == "35:36:120:121-hd.sdf"
+        assert result == "35:36:119:120-hd.sdf"
 
     def test_southern_western_hemisphere(self):
-        """S23W046.hgt.gz -> -23:-22:46:47.sdf (Brazil-like coords)."""
+        """S23W046.hgt.gz -> -23:-22:45:46.sdf (Brazil-like coords)."""
         result = self.Splat._hgt_filename_to_sdf_filename("S23W046.hgt.gz", high_resolution=False)
-        assert result == "-23:-22:46:47.sdf"
+        assert result == "-23:-22:45:46.sdf"
 
     def test_default_is_standard_resolution(self):
         """Default high_resolution should be False (standard .sdf extension)."""
@@ -265,13 +267,16 @@ class TestCreateSplatDcf:
 
         self.Splat = Splat
 
+    # _create_splat_dcf now takes no arguments — colormap is applied client-side
+    # and the backend always emits a fixed grayscale ramp from -130 to -30 dBm.
+
     def test_returns_bytes(self):
-        result = self.Splat._create_splat_dcf("rainbow", -130.0, -30.0)
+        result = self.Splat._create_splat_dcf()
         assert isinstance(result, bytes)
 
     def test_contains_32_color_entries(self):
         """SPLAT! supports up to 32 color levels; the DCF must contain exactly 32."""
-        result = self.Splat._create_splat_dcf("rainbow", -130.0, -30.0)
+        result = self.Splat._create_splat_dcf()
         content = result.decode("utf-8")
         # Each data line starts with a signed dBm value like "+xxx: " or "-xxx: "
         data_lines = [
@@ -283,7 +288,7 @@ class TestCreateSplatDcf:
 
     def test_color_values_are_valid_rgb(self):
         """All RGB values in the DCF must be between 0 and 255 inclusive."""
-        result = self.Splat._create_splat_dcf("viridis", -130.0, -80.0)
+        result = self.Splat._create_splat_dcf()
         content = result.decode("utf-8")
         for line in content.splitlines():
             if line and not line.startswith(";") and ":" in line:

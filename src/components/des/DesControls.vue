@@ -123,8 +123,8 @@ function onRegionChange() {
   }
 }
 
-function onInit() {
-  desStore.initialize(undefined, sitesStore.localSites)
+async function onInit() {
+  await desStore.initialize(undefined, sitesStore.localSites)
   // Auto-select first node as source
   if (nodesStore.nodes.length > 0) {
     sourceNodeId.value = nodesStore.nodes[0].id

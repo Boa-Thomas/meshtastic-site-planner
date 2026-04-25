@@ -1,7 +1,6 @@
 import { ref } from 'vue'
 import { useMapStore } from '../stores/mapStore'
 import { useSitesStore } from '../stores/sitesStore'
-import html2canvas from 'html2canvas'
 import L from 'leaflet'
 
 export function useExport() {
@@ -26,6 +25,8 @@ export function useExport() {
     const savedZoom = mapStore.map.getZoom()
 
     try {
+      const { default: html2canvas } = await import('html2canvas')
+
       const vw = mapStore.mapContainer.clientWidth
       const vh = mapStore.mapContainer.clientHeight
 

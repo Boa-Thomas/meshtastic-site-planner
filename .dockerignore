@@ -8,3 +8,20 @@ __pycache__
 *.pyc
 .env
 .gitignore
+
+# Local build artefacts (not app/ui — that one is served by FastAPI in production)
+.cache
+.pytest_cache
+.mypy_cache
+.coverage
+coverage
+htmlcov
+
+# Test/CI scratch
+*.log
+*.local
+.DS_Store
+
+# Cached/persisted data
+.splat_tiles
+app/data

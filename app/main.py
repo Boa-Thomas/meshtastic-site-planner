@@ -13,10 +13,11 @@ Endpoints:
 import asyncio
 import json
 import os
-import redis
 from fastapi import FastAPI, BackgroundTasks
+from app.redis_config import get_redis_client
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from uuid import uuid4, UUID
 from starlette.requests import Request
@@ -31,6 +32,13 @@ from app.routers import nodes as nodes_router
 from app.routers import sites as sites_router
 from app.routers import projects as projects_router
 from app.routers import debug as debug_router
+from app.metrics import (
+    inc,
+    measure,
+    result_cache_hits_total,
+    setup_instrumentator,
+    simulation_duration_seconds,
+)
 import logging
 import io
 import time
@@ -43,10 +51,13 @@ logger = logging.getLogger(__name__)
 USE_CELERY = os.environ.get("USE_CELERY", "false").lower() == "true"
 
 # Initialize Redis client for binary data
-redis_client = redis.StrictRedis(host="redis", port=6379, decode_responses=False)
+redis_client = get_redis_client()
 
 # Initialize FastAPI app
 app = FastAPI()
+
+# Prometheus instrumentation (no-op if dependency unavailable)
+setup_instrumentator(app)
 
 # Rate limiter (per-IP, using remote address)
 limiter = Limiter(key_func=get_remote_address)
@@ -58,6 +69,11 @@ allowed_origins = os.environ.get(
     "ALLOWED_ORIGINS",
     "http://localhost:5173,https://site.meshtastic.org"
 ).split(",")
+
+# Gzip compress JSON/GeoTIFF responses (skips small payloads automatically).
+# Streamed SSE responses are not affected because GZipMiddleware only handles
+# fully-buffered responses.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 app.add_middleware(
     CORSMiddleware,
@@ -92,10 +108,13 @@ def run_splat(task_id: str, request: CoveragePredictionRequest):
     Raises:
         Exception: If SPLAT! fails during execution.
     """
+    sim_status = "failed"
+    sim_start = time.perf_counter()
     try:
         logger.info(f"Starting coverage prediction for task {task_id}.")
         engine = get_engine(request.engine)
         geotiff_data = engine.coverage_prediction(request, task_id=task_id)
+        sim_status = "success"
 
         # Log before storing in Redis
         logger.info(f"Storing result in Redis for task {task_id}")
@@ -128,6 +147,14 @@ def run_splat(task_id: str, request: CoveragePredictionRequest):
         redis_client.setex(f"{task_id}:status", 3600, "failed")
         redis_client.setex(f"{task_id}:error", 3600, str(e))
         raise
+    finally:
+        if simulation_duration_seconds is not None:
+            try:
+                simulation_duration_seconds.labels(
+                    status=sim_status, queue="inline"
+                ).observe(time.perf_counter() - sim_start)
+            except Exception:
+                pass
 
 def _dispatch_prediction(payload: CoveragePredictionRequest, background_tasks: BackgroundTasks | None = None) -> dict:
     """
@@ -143,11 +170,35 @@ def _dispatch_prediction(payload: CoveragePredictionRequest, background_tasks: B
         cached_status = redis_client.get(f"{cached_task_id}:status")
         if cached_status and cached_status.decode("utf-8") in ("completed", "processing"):
             logger.info(f"RF cache hit for hash {rf_hash}, returning task {cached_task_id}")
+            inc(result_cache_hits_total, strategy="rf_hash")
             return {"task_id": cached_task_id, "cached": True}
+
+    # Bbox-aware fuzzy lookup: identical RF params within RF_BBOX_TOLERANCE_DEG of
+    # an existing simulation reuse it. Disabled by setting tolerance to 0.
+    bbox_tolerance = float(os.environ.get("RF_BBOX_TOLERANCE_DEG", "0.0005"))
+    if bbox_tolerance > 0:
+        for nbr_hash in payload.rf_neighborhood_hashes(bbox_tolerance):
+            if nbr_hash == rf_hash:
+                continue
+            nbr_task_id = redis_client.get(f"rfbbox:{nbr_hash}")
+            if not nbr_task_id:
+                continue
+            nbr_task_id = nbr_task_id.decode("utf-8")
+            nbr_status = redis_client.get(f"{nbr_task_id}:status")
+            if nbr_status and nbr_status.decode("utf-8") in ("completed", "processing"):
+                logger.info(
+                    f"Bbox cache hit (~{bbox_tolerance:g}°) for {rf_hash} -> task {nbr_task_id}"
+                )
+                inc(result_cache_hits_total, strategy="bbox")
+                return {"task_id": nbr_task_id, "cached": True}
 
     task_id = str(uuid4())
     redis_client.setex(f"{task_id}:status", 3600, "processing")
     redis_client.setex(f"rfcache:{rf_hash}", 3600, task_id)
+    if bbox_tolerance > 0:
+        # Index by the center neighborhood hash for future fuzzy lookups
+        center_hash = payload.rf_neighborhood_hashes(bbox_tolerance)[0]
+        redis_client.setex(f"rfbbox:{center_hash}", 3600, task_id)
     if USE_CELERY:
         from app.tasks import run_splat_task
         heavy_threshold = int(os.environ.get("HEAVY_RADIUS_THRESHOLD_KM", "200")) * 1000
@@ -376,6 +427,12 @@ async def get_result(task_id: UUID):
         StreamingResponse: A downloadable GeoTIFF file if the task is "completed."
     """
     tid = str(task_id)
+    # Long Cache-Control: a completed simulation result is content-addressed
+    # by task_id and never changes, so clients/CDNs can cache it indefinitely.
+    immutable_headers = {
+        "Content-Disposition": f"attachment; filename={tid}.tif",
+        "Cache-Control": "public, max-age=31536000, immutable",
+    }
     status = redis_client.get(f"{tid}:status")
     if not status:
         # Fall back to disk storage if Redis TTL expired
@@ -386,7 +443,7 @@ async def get_result(task_id: UUID):
             return FileResponse(
                 raster_path,
                 media_type="image/tiff",
-                headers={"Content-Disposition": f"attachment; filename={tid}.tif"},
+                headers=immutable_headers,
             )
         logger.warning(f"Task {tid} not found in Redis or on disk.")
         return JSONResponse({"error": "Task not found"}, status_code=404)
@@ -402,7 +459,7 @@ async def get_result(task_id: UUID):
                 return FileResponse(
                     raster_path,
                     media_type="image/tiff",
-                    headers={"Content-Disposition": f"attachment; filename={tid}.tif"},
+                    headers=immutable_headers,
                 )
             logger.error(f"No data found for completed task {tid}.")
             return JSONResponse({"error": "No result found"}, status_code=500)
@@ -411,7 +468,7 @@ async def get_result(task_id: UUID):
         return StreamingResponse(
             geotiff_file,
             media_type="image/tiff",
-            headers={"Content-Disposition": f"attachment; filename={tid}.tif"}
+            headers=immutable_headers,
         )
     elif status == "failed":
         error = redis_client.get(f"{tid}:error")

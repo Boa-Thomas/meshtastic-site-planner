@@ -22,6 +22,8 @@ import time
 import docker
 import redis
 
+from app.redis_config import DB_CELERY_BROKER, get_redis_client
+
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s %(message)s",
@@ -176,7 +178,7 @@ def main():
         f"check={CHECK_INTERVAL}s cooldown={SCALE_DOWN_DELAY}s"
     )
 
-    r = redis.Redis(host=REDIS_HOST, port=int(REDIS_PORT), db=1)
+    r = get_redis_client(db=DB_CELERY_BROKER)
     client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
 
     idle_since: float | None = None

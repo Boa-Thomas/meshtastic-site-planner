@@ -55,9 +55,6 @@ function drawLinks() {
 
   for (const [, pair] of pairMap) {
     const linkRef = pair.ab ?? pair.ba!
-    const fromId = pair.ab ? linkRef.fromNodeId : linkRef.fromNodeId
-    const toId = pair.ab ? linkRef.toNodeId : linkRef.toNodeId
-
     const fromNode = nodesStore.nodeById(pair.ab?.fromNodeId ?? pair.ba!.fromNodeId)
     const toNode = nodesStore.nodeById(pair.ab?.toNodeId ?? pair.ba!.toNodeId)
     if (!fromNode || !toNode) continue

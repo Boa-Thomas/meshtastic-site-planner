@@ -9,6 +9,7 @@ x-worker-base: &worker-base
     - HOME=/home/appuser
     - TERM=xterm
     - REDIS_HOST=redis
+    - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     - SPLAT_TILE_CACHE=/app/.splat_tiles
   depends_on:
     - redis
@@ -34,6 +35,8 @@ services:
       - LETSENCRYPT_HOST=site.meshtastic.org
       - USE_CELERY=true
       - HEAVY_RADIUS_THRESHOLD_KM=${HEAVY_RADIUS_THRESHOLD_KM:-200}
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     mem_limit: 12G
     ports:
       - 8080:8080
@@ -50,7 +53,9 @@ services:
     container_name: redis
     ports:
       - 6379:6379
-    command: [redis-server]
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    command: ["sh", "-c", "if [ -n \"$$REDIS_PASSWORD\" ]; then exec redis-server --requirepass \"$$REDIS_PASSWORD\"; else exec redis-server; fi"]
     restart: unless-stopped
     networks:
       - app-network
@@ -114,6 +119,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - MIN_LIGHT_WORKERS=${MIN_LIGHT_WORKERS:-1}
       - MAX_LIGHT_WORKERS=${MAX_LIGHT_WORKERS:-6}
       - MIN_HEAVY_WORKERS=${MIN_HEAVY_WORKERS:-1}
@@ -127,11 +133,27 @@ services:
     networks:
       - app-network
 
+  prefetch:
+    <<: *worker-base
+    profiles: ["prefetch"]
+    command: ["python", "-m", "app.prefetch"]
+    environment:
+      - HOME=/home/appuser
+      - TERM=xterm
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - SPLAT_TILE_CACHE=/app/.splat_tiles
+      - PREFETCH_TOP_N=${PREFETCH_TOP_N:-50}
+      - PREFETCH_INTERVAL_SECONDS=${PREFETCH_INTERVAL_SECONDS:-300}
+      - PREFETCH_MIN_HITS=${PREFETCH_MIN_HITS:-2}
+
   flower:
     build: .
     environment:
       - HOME=/home/appuser
       - TERM=xterm
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     ports:
       - "5555:5555"
     depends_on:

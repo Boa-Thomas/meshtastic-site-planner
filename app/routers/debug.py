@@ -2,23 +2,20 @@
 
 import json
 import logging
-import os
 import time
-import redis
 from fastapi import APIRouter
+
+from app.redis_config import DB_APP, DB_CELERY_BROKER, get_redis_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/debug", tags=["debug"])
 
-REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
-REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
-
 
 def _get_queue_depths() -> dict:
     """Get Celery queue depths from Redis broker (DB 1)."""
     try:
-        r = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=1, decode_responses=True)
+        r = get_redis_client(db=DB_CELERY_BROKER, decode_responses=True)
         return {
             "default": r.llen("default") or 0,
             "heavy": r.llen("heavy") or 0,
@@ -31,7 +28,7 @@ def _get_queue_depths() -> dict:
 def _get_active_tasks() -> list:
     """Scan Redis DB 0 for tasks with status 'processing' and their progress."""
     try:
-        r = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+        r = get_redis_client(db=DB_APP, decode_responses=True)
         active = []
         cursor = 0
         while True:

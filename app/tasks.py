@@ -8,9 +8,9 @@ to avoid sharing connections across processes.
 import json
 import logging
 import os
-import redis
 from app.celery_app import celery_app
 from app.models.CoveragePredictionRequest import CoveragePredictionRequest
+from app.redis_config import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +26,8 @@ def _get_engine(name=None):
 def _get_redis():
     global _redis_client
     if _redis_client is None:
-        import os
-        host = os.environ.get("REDIS_HOST", "redis")
-        port = int(os.environ.get("REDIS_PORT", 6379))
-        _redis_client = redis.StrictRedis(host=host, port=port, decode_responses=False)
-        logger.info(f"Initialized Redis client (host={host}, port={port}, db=0)")
+        _redis_client = get_redis_client()
+        logger.info("Initialized Redis client (db=0) via redis_config")
     return _redis_client
 
 
