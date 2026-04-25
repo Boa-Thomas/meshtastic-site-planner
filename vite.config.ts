@@ -1,9 +1,17 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import compression from 'vite-plugin-compression'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    // Pre-compress JS/CSS assets at build time. Nginx can serve the .br /
+    // .gz files directly when the client supports them, halving bytes on
+    // the wire for the leaflet/georaster vendor chunk in particular.
+    compression({ algorithm: 'brotliCompress', ext: '.br', threshold: 1024 }),
+    compression({ algorithm: 'gzip', ext: '.gz', threshold: 1024 }),
+  ],
   server: {
     proxy: {
       '/predict': 'http://localhost:8080/',

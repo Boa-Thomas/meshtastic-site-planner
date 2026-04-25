@@ -133,6 +133,20 @@ services:
     networks:
       - app-network
 
+  prefetch:
+    <<: *worker-base
+    profiles: ["prefetch"]
+    command: ["python", "-m", "app.prefetch"]
+    environment:
+      - HOME=/home/appuser
+      - TERM=xterm
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - SPLAT_TILE_CACHE=/app/.splat_tiles
+      - PREFETCH_TOP_N=${PREFETCH_TOP_N:-50}
+      - PREFETCH_INTERVAL_SECONDS=${PREFETCH_INTERVAL_SECONDS:-300}
+      - PREFETCH_MIN_HITS=${PREFETCH_MIN_HITS:-2}
+
   flower:
     build: .
     environment:

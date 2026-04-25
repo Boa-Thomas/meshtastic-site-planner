@@ -17,6 +17,7 @@ from fastapi import FastAPI, BackgroundTasks
 from app.redis_config import get_redis_client
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from uuid import uuid4, UUID
 from starlette.requests import Request
@@ -68,6 +69,11 @@ allowed_origins = os.environ.get(
     "ALLOWED_ORIGINS",
     "http://localhost:5173,https://site.meshtastic.org"
 ).split(",")
+
+# Gzip compress JSON/GeoTIFF responses (skips small payloads automatically).
+# Streamed SSE responses are not affected because GZipMiddleware only handles
+# fully-buffered responses.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 app.add_middleware(
     CORSMiddleware,
@@ -421,6 +427,12 @@ async def get_result(task_id: UUID):
         StreamingResponse: A downloadable GeoTIFF file if the task is "completed."
     """
     tid = str(task_id)
+    # Long Cache-Control: a completed simulation result is content-addressed
+    # by task_id and never changes, so clients/CDNs can cache it indefinitely.
+    immutable_headers = {
+        "Content-Disposition": f"attachment; filename={tid}.tif",
+        "Cache-Control": "public, max-age=31536000, immutable",
+    }
     status = redis_client.get(f"{tid}:status")
     if not status:
         # Fall back to disk storage if Redis TTL expired
@@ -431,7 +443,7 @@ async def get_result(task_id: UUID):
             return FileResponse(
                 raster_path,
                 media_type="image/tiff",
-                headers={"Content-Disposition": f"attachment; filename={tid}.tif"},
+                headers=immutable_headers,
             )
         logger.warning(f"Task {tid} not found in Redis or on disk.")
         return JSONResponse({"error": "Task not found"}, status_code=404)
@@ -447,7 +459,7 @@ async def get_result(task_id: UUID):
                 return FileResponse(
                     raster_path,
                     media_type="image/tiff",
-                    headers={"Content-Disposition": f"attachment; filename={tid}.tif"},
+                    headers=immutable_headers,
                 )
             logger.error(f"No data found for completed task {tid}.")
             return JSONResponse({"error": "No result found"}, status_code=500)
@@ -456,7 +468,7 @@ async def get_result(task_id: UUID):
         return StreamingResponse(
             geotiff_file,
             media_type="image/tiff",
-            headers={"Content-Disposition": f"attachment; filename={tid}.tif"}
+            headers=immutable_headers,
         )
     elif status == "failed":
         error = redis_client.get(f"{tid}:error")

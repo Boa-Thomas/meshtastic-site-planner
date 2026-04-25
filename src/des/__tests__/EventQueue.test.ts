@@ -15,6 +15,7 @@ function makePacket(id: string | number): Packet {
     payloadSizeBytes: 32,
     isAck: false,
     retryCount: 0,
+    routePath: [],
   }
 }
 

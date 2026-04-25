@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { markRaw } from 'vue'
 import { SimulationEngine, createDefaultConfig } from '../des'
-import type { SimEvent, SimulationConfig, SimulationMetrics, LinkInfo, RssiOverrideMap } from '../des'
+import type { SimEvent, SimulationConfig, SimulationMetrics, LinkInfo } from '../des'
 import { createEmptyMetrics } from '../des'
 import { PATH_LOSS_PROFILES } from '../des/types'
 import type { PathLossProfileId } from '../des/types'

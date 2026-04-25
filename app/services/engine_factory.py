@@ -38,7 +38,9 @@ def get_engine(name: Optional[str] = None) -> PropagationEngine:
         from app.services.splat import Splat
         splat_path = os.environ.get("SPLAT_PATH", "/app/splat")
         cache_dir = os.environ.get("SPLAT_TILE_CACHE", ".splat_tiles")
-        engine = Splat(splat_path=splat_path, cache_dir=cache_dir)
+        cache_size_gb = float(os.environ.get("SPLAT_TILE_CACHE_SIZE_GB", "10"))
+        engine = Splat(splat_path=splat_path, cache_dir=cache_dir,
+                       cache_size_gb=cache_size_gb)
     elif engine_name == "signal_server":
         from app.services.signal_server import SignalServerEngine
         binary = os.environ.get("SIGNAL_SERVER_PATH", "/usr/local/bin/signalserverHD")

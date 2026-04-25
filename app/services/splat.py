@@ -133,7 +133,16 @@ class Splat(PropagationEngine):
             logger.warning(f"Redis SRTM tile cache unavailable, falling back to disk only: {e}")
             self._redis_tile_cache = None
 
-        self.s3 = boto3.client("s3", config=Config(signature_version=UNSIGNED))
+        # Tunable boto3 client: larger pool + adaptive retry. The pool size
+        # has to match SPLAT_DOWNLOAD_WORKERS so the threadpool above doesn't
+        # serialize on a connection. Default 16 mirrors the download phase.
+        s3_pool = int(os.environ.get("SPLAT_DOWNLOAD_WORKERS", "16"))
+        s3_config = Config(
+            signature_version=UNSIGNED,
+            max_pool_connections=max(s3_pool, 10),
+            retries={"max_attempts": 5, "mode": "adaptive"},
+        )
+        self.s3 = boto3.client("s3", config=s3_config)
         self.bucket_name = bucket_name
         self.bucket_prefix = bucket_prefix
 
@@ -719,6 +728,13 @@ class Splat(PropagationEngine):
         Raises:
             Exception: If the tile cannot be downloaded from S3.
         """
+        # Track popularity for the prefetch worker (best-effort, fire-and-forget).
+        if self._redis_tile_cache is not None:
+            try:
+                self._redis_tile_cache.zincrby("srtm:access", 1, tile_name)
+            except Exception:
+                pass
+
         if tile_name in self.tile_cache:
             logger.info(f"Cache hit (disk): {tile_name}")
             inc(srtm_cache_events_total, tier="disk", event="hit")

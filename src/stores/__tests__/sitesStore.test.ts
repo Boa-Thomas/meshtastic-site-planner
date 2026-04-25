@@ -122,6 +122,7 @@ describe('sitesStore', () => {
         params: {} as any,
         taskId: 'task-001',
         raster: {},
+        visible: true,
         // rasterLayer deliberately omitted — the action guards with `if (site.rasterLayer)`
       })
 
@@ -139,11 +140,13 @@ describe('sitesStore', () => {
         params: {} as any,
         taskId: 'task-001',
         raster: {},
+        visible: true,
       })
       store.localSites.push({
         params: {} as any,
         taskId: 'task-002',
         raster: {},
+        visible: true,
       })
 
       await store.removeSite(0)

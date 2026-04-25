@@ -59,7 +59,7 @@ import { ref } from 'vue'
 import { antennaPresets } from '../data/antennaPresets'
 import type { AntennaOrientation } from '../types/index'
 
-const props = defineProps<{
+defineProps<{
   orientation: AntennaOrientation
   gainDbi: number
   azimuth: number
