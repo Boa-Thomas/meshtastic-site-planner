@@ -231,9 +231,52 @@ export const useSitesStore = defineStore('sites', {
             const rasterBuffer = await getSiteRaster(meta.taskId)
             const copy = rasterBuffer.slice(0)
             const geoRaster = await parseGeoraster(copy)
-            const params: SplatParams = typeof meta.params === 'string'
+            const rawParams = typeof meta.params === 'string'
               ? JSON.parse(meta.params)
               : meta.params
+            // Server persists params in the flat SPLAT request shape (lat,
+            // lon, tx_height, ...). Re-wrap into the nested SplatParams the
+            // UI expects so older persisted sites keep rendering.
+            const params: SplatParams = rawParams && rawParams.transmitter
+              ? rawParams as SplatParams
+              : {
+                  transmitter: {
+                    name: `Site ${meta.taskId.slice(0, 8)}`,
+                    tx_lat: rawParams?.lat,
+                    tx_lon: rawParams?.lon,
+                    tx_power: rawParams?.tx_power,
+                    tx_gain: rawParams?.tx_gain,
+                    frequency_mhz: rawParams?.frequency_mhz,
+                  },
+                  receiver: {
+                    rx_height: rawParams?.rx_height,
+                    rx_gain: rawParams?.rx_gain,
+                    signal_threshold: rawParams?.signal_threshold,
+                    rx_loss: rawParams?.system_loss,
+                  },
+                  environment: {
+                    radio_climate: rawParams?.radio_climate,
+                    polarization: rawParams?.polarization,
+                    clutter_height: rawParams?.clutter_height,
+                    ground_dielectric: rawParams?.ground_dielectric,
+                    ground_conductivity: rawParams?.ground_conductivity,
+                    atmosphere_bending: rawParams?.atmosphere_bending,
+                  },
+                  simulation: {
+                    situation_fraction: rawParams?.situation_fraction,
+                    time_fraction: rawParams?.time_fraction,
+                    radius: rawParams?.radius,
+                    high_resolution: rawParams?.high_resolution,
+                  },
+                  display: {
+                    color_scale: rawParams?.colormap,
+                    min_dbm: rawParams?.min_dbm,
+                    max_dbm: rawParams?.max_dbm,
+                    overlay_transparency: 50,
+                  },
+                  // tx_height lives at the top level in the flat shape
+                  tx_height: rawParams?.tx_height,
+                } as unknown as SplatParams
             this.localSites.push({
               params,
               taskId: meta.taskId,

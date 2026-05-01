@@ -113,7 +113,7 @@
                             {{ site.visible ? 'V' : 'H' }}
                           </button>
                           <span class="flex-fill text-truncate small">
-                            {{ site.params.transmitter.name }}
+                            {{ site.params?.transmitter?.name ?? `Site ${site.taskId.slice(0, 8)}` }}
                             <span v-if="site.isPreview" class="badge bg-info ms-1">Preview</span>
                           </span>
                           <button type="button" @click="sitesStore.removeSite(index)" class="btn-close btn-close-white btn-sm" aria-label="Remove"></button>
