@@ -11,6 +11,20 @@ x-worker-base: &worker-base
     - REDIS_HOST=redis
     - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     - SPLAT_TILE_CACHE=/app/.splat_tiles
+    # Terrain pipeline — workers run the same SPLAT! flow as the app
+    # service, so they need the DEM/clutter env to match. See .env.example.
+    - DEM_SOURCE=${DEM_SOURCE:-srtm}
+    - FABDEM_BUCKET=${FABDEM_BUCKET:-}
+    - FABDEM_PREFIX=${FABDEM_PREFIX:-}
+    - FABDEM_FALLBACK_SOURCE=${FABDEM_FALLBACK_SOURCE:-copernicus}
+    - FABDEM_FILENAME_TEMPLATE=${FABDEM_FILENAME_TEMPLATE:-{ns}{lat:02d}{ew}{lon:03d}_FABDEM_V1-2.tif}
+    - CLUTTER_SOURCE=${CLUTTER_SOURCE:-none}
+    - CLUTTER_BUCKET=${CLUTTER_BUCKET:-}
+    - CLUTTER_PREFIX=${CLUTTER_PREFIX:-}
+    - CLUTTER_FILENAME_TEMPLATE=${CLUTTER_FILENAME_TEMPLATE:-}
+    - CLUTTER_PENETRATION_FACTOR=${CLUTTER_PENETRATION_FACTOR:-0.6}
+    - CLUTTER_FACTOR_CALIBRATED=${CLUTTER_FACTOR_CALIBRATED:-false}
+    - CLUTTER_CALIBRATION_NOTES=${CLUTTER_CALIBRATION_NOTES:-}
   depends_on:
     - redis
   working_dir: "/app"
@@ -37,6 +51,20 @@ services:
       - HEAVY_RADIUS_THRESHOLD_KM=${HEAVY_RADIUS_THRESHOLD_KM:-200}
       - REDIS_HOST=redis
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # Terrain pipeline (mirrored on worker-base above so app + workers
+      # always agree on which DEM/clutter to use).
+      - DEM_SOURCE=${DEM_SOURCE:-srtm}
+      - FABDEM_BUCKET=${FABDEM_BUCKET:-}
+      - FABDEM_PREFIX=${FABDEM_PREFIX:-}
+      - FABDEM_FALLBACK_SOURCE=${FABDEM_FALLBACK_SOURCE:-copernicus}
+      - FABDEM_FILENAME_TEMPLATE=${FABDEM_FILENAME_TEMPLATE:-{ns}{lat:02d}{ew}{lon:03d}_FABDEM_V1-2.tif}
+      - CLUTTER_SOURCE=${CLUTTER_SOURCE:-none}
+      - CLUTTER_BUCKET=${CLUTTER_BUCKET:-}
+      - CLUTTER_PREFIX=${CLUTTER_PREFIX:-}
+      - CLUTTER_FILENAME_TEMPLATE=${CLUTTER_FILENAME_TEMPLATE:-}
+      - CLUTTER_PENETRATION_FACTOR=${CLUTTER_PENETRATION_FACTOR:-0.6}
+      - CLUTTER_FACTOR_CALIBRATED=${CLUTTER_FACTOR_CALIBRATED:-false}
+      - CLUTTER_CALIBRATION_NOTES=${CLUTTER_CALIBRATION_NOTES:-}
     mem_limit: 12G
     ports:
       - 8080:8080

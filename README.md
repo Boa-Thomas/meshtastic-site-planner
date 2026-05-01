@@ -37,6 +37,8 @@ Key calibration corrections included dual-slope path loss (steeper attenuation b
 - **9 channel presets** — SHORT_TURBO (-108 dBm) through VERY_LONG_SLOW (-132 dBm) with accurate SF/BW/CR parameters
 - **6 antenna presets** — Stock stubby, quarter-wave whip, 5/6 dBi omni, 9/12 dBi Yagi with beamwidth modeling
 - **Installation types** — Rooftop, mast, window (with azimuth cone), portable
+- **Pluggable terrain pipeline** — Switch between SRTM (default), Copernicus GLO-30 DSM, and FABDEM (DTM, no canopy/buildings) via env or per request
+- **Spatial clutter** — Per-pixel canopy height (Lang 2023, MapBiomas) folded into a synthetic DSM, plus a calibration pipeline to fit the penetration factor against real RSSI
 - **DES visualization** — Real-time event log, link overlay on map, per-node metrics, traceroute view
 - **Project save/load** — Export full project state (nodes, sites, raster overlays, DES config) as compressed `.json.gz`
 - **PDF export** — Generate coverage map reports with html2canvas + jsPDF
@@ -102,11 +104,15 @@ Frontend (Vue 3 + TypeScript + Pinia)
                       DesControls, DesMetrics, DesEventLog, DesLinkOverlay
 
 Backend (FastAPI + Python)
-├── POST /predict     Submit coverage prediction request
-├── GET /status/{id}  Poll task status
-├── GET /events/{id}  SSE stream for real-time task updates
-├── GET /result/{id}  Download GeoTIFF result
-└── SPLAT! pipeline   SRTM download → HGT→SDF → SPLAT! → PPM+KML → GeoTIFF
+├── POST /predict             Submit coverage prediction request
+├── GET  /status/{id}         Poll task status
+├── GET  /events/{id}         SSE stream for real-time task updates
+├── GET  /result/{id}         Download GeoTIFF result
+├── GET  /api/settings/terrain         Active DEM/clutter config visible to UI
+├── POST /api/calibration/measurements Submit ground-truth RSSI
+├── GET  /api/calibration/summary      Aggregate by DEM/clutter
+└── SPLAT! pipeline   DEM download → optional clutter overlay →
+                      HGT→SDF → SPLAT! → PPM+KML → GeoTIFF
 
 Infrastructure
 ├── Docker Compose    app + redis + nginx-proxy + acme-companion
@@ -130,6 +136,61 @@ An **autoscaler** service monitors Redis queue depth and dynamically scales work
 - **Under load:** Up to 4 light + 3 heavy = 7 parallel workers
 - **Cooldown:** Scales down to baseline after 120s of empty queues
 
+### Terrain Pipeline
+
+The DEM source and the optional spatial-clutter layer are pluggable. By
+default `DEM_SOURCE=srtm` keeps the historical behaviour; switch to
+`copernicus` (public AWS Open Data) or `fabdem` (operator-hosted DTM
+mirror) without code changes. When clutter is enabled, canopy heights are
+folded into a synthetic DSM before SPLAT! runs, so vegetation is treated
+as terrain instead of via the uniform `-gc` knob.
+
+| Source | Type | Where it comes from |
+|--------|------|---------------------|
+| `srtm` | DSM, 30 m | Public AWS bucket `elevation-tiles-prod` (default) |
+| `copernicus` | DSM, 30 m | Public AWS bucket `copernicus-dem-30m` |
+| `fabdem` | DTM, 30 m | Your S3 mirror (CC BY-NC-SA — not redistributable) |
+| `lang2023` (clutter) | Canopy, 10 m | Your S3 mirror (Lang et al. 2023) |
+| `mapbiomas` (clutter) | Canopy, 30 m | Your S3 mirror (MapBiomas, BR-only) |
+
+Operator workflow:
+
+1. **Mirror tiles** with the bundled CLI (no app deps required):
+   ```bash
+   python utils/mirror_terrain.py ingest \
+       --dataset fabdem --bbox=-25,-49,-23,-46 \
+       --source-url "https://example.org/{tile}_FABDEM_V1-2.tif" \
+       --dest-bucket my-mirror --dest-prefix fabdem-v1-2
+   ```
+   `list` enumerates required tiles, `verify` audits a populated bucket.
+
+2. **Configure** by setting `DEM_SOURCE`, `FABDEM_BUCKET`, `CLUTTER_SOURCE`,
+   `CLUTTER_BUCKET`, etc. in `.env`. Workers and the API container read the
+   same vars (see `docker-compose.yml`). Per-request override is also
+   supported — `POST /predict` accepts optional `dem_source`,
+   `clutter_source` and `clutter_penetration_factor` fields, surfaced in
+   the UI under "Terrain & Clutter".
+
+3. **Calibrate** the penetration factor. The default of `0.6` is a
+   placeholder. Once you have ≥ 30 ground-truth RSSI points (submit them
+   via `POST /api/calibration/measurements`), run:
+   ```bash
+   python utils/calibrate_clutter.py \
+       --api-base http://localhost:8080 \
+       --dem-source fabdem --clutter-source lang2023 \
+       --factors 0.3,0.4,0.5,0.6,0.7,0.8
+   ```
+   The script picks the factor with lowest MAE and writes a JSON report.
+   After updating `CLUTTER_PENETRATION_FACTOR` in `.env`, set
+   `CLUTTER_FACTOR_CALIBRATED=true` to remove the "uncalibrated" UI
+   warning.
+
+The result cache is namespaced by `(dem_source, clutter_source, factor)`
+quantized to 0.01, so different combinations never share tiles. You can
+A/B test sources without invalidating each other.
+
+See [docs/dem-roadmap.md](docs/dem-roadmap.md) for design notes.
+
 ### Environment Variables
 
 Copy `.env.example` to `.env` and adjust as needed. Key variables:
@@ -145,6 +206,13 @@ Copy `.env.example` to `.env` and adjust as needed. Key variables:
 | `HEAVY_RADIUS_THRESHOLD_KM` | `200` | Radius threshold for heavy queue routing |
 | `MAX_SIMULATION_RADIUS_KM` | `600` | Maximum simulation radius |
 | `SCALE_DOWN_DELAY` | `120` | Seconds before autoscaler reduces workers |
+| `DEM_SOURCE` | `srtm` | Elevation source: `srtm`, `copernicus`, or `fabdem` |
+| `FABDEM_BUCKET` | _(empty)_ | S3 bucket holding your FABDEM mirror |
+| `FABDEM_FALLBACK_SOURCE` | `copernicus` | DEM used when a FABDEM tile is missing |
+| `CLUTTER_SOURCE` | `none` | `none`, `lang2023`, `mapbiomas`, or `custom` |
+| `CLUTTER_BUCKET` | _(empty)_ | S3 bucket holding your canopy-height tiles |
+| `CLUTTER_PENETRATION_FACTOR` | `0.6` | Canopy height multiplier (placeholder until calibrated) |
+| `CLUTTER_FACTOR_CALIBRATED` | `false` | Set `true` once factor is fitted to field data |
 
 See `.env.example` for the full list.
 
