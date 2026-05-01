@@ -36,11 +36,15 @@ def get_engine(name: Optional[str] = None) -> PropagationEngine:
 
     if engine_name == "splat":
         from app.services.splat import Splat
+        from app.services.clutter import make_clutter_source_from_env
         splat_path = os.environ.get("SPLAT_PATH", "/app/splat")
         cache_dir = os.environ.get("SPLAT_TILE_CACHE", ".splat_tiles")
         cache_size_gb = float(os.environ.get("SPLAT_TILE_CACHE_SIZE_GB", "10"))
+        dem_source = os.environ.get("DEM_SOURCE")  # "srtm" (default) | "copernicus" | "fabdem"
+        clutter_source = make_clutter_source_from_env()
         engine = Splat(splat_path=splat_path, cache_dir=cache_dir,
-                       cache_size_gb=cache_size_gb)
+                       cache_size_gb=cache_size_gb, dem_source=dem_source,
+                       clutter_source=clutter_source)
     elif engine_name == "signal_server":
         from app.services.signal_server import SignalServerEngine
         binary = os.environ.get("SIGNAL_SERVER_PATH", "/usr/local/bin/signalserverHD")

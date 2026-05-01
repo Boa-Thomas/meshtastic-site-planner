@@ -47,9 +47,9 @@ def _build_engine():
     return get_engine("splat")
 
 
-def _top_tiles(redis_client, top_n: int, min_hits: int) -> list[tuple[str, float]]:
+def _top_tiles(redis_client, access_zset: str, top_n: int, min_hits: int) -> list[tuple[str, float]]:
     """Return [(tile_name, score)] sorted by access count desc."""
-    raw = redis_client.zrevrange("srtm:access", 0, top_n - 1, withscores=True)
+    raw = redis_client.zrevrange(access_zset, 0, top_n - 1, withscores=True)
     out: list[tuple[str, float]] = []
     for entry, score in raw:
         if score < min_hits:
@@ -67,7 +67,7 @@ def _ensure_cached(engine, redis_client, tiles: Iterable[tuple[str, float]]) -> 
     warmed = 0
     already = 0
     for tile_name, _ in tiles:
-        redis_key = f"srtm:hgt:{tile_name}"
+        redis_key = engine.tile_redis_key(tile_name)
         try:
             if redis_client.exists(redis_key):
                 already += 1
@@ -84,13 +84,14 @@ def _ensure_cached(engine, redis_client, tiles: Iterable[tuple[str, float]]) -> 
 
 def run_once(top_n: int, min_hits: int) -> None:
     redis_client = get_redis_client(db=DB_SRTM_CACHE)
-    tiles = _top_tiles(redis_client, top_n=top_n, min_hits=min_hits)
-    if not tiles:
-        logger.info("no popular tiles to prefetch yet")
-        return
     engine = _build_engine()
+    access_zset = f"dem:{engine.dem_source}:access"
+    tiles = _top_tiles(redis_client, access_zset, top_n=top_n, min_hits=min_hits)
+    if not tiles:
+        logger.info(f"no popular tiles to prefetch yet ({access_zset})")
+        return
     warmed, already = _ensure_cached(engine, redis_client, tiles)
-    logger.info(f"cycle complete: warmed={warmed} already_cached={already} considered={len(tiles)}")
+    logger.info(f"cycle complete: warmed={warmed} already_cached={already} considered={len(tiles)} source={engine.dem_source}")
 
 
 def main() -> None:
