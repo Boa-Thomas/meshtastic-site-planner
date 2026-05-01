@@ -43,6 +43,11 @@ export const useSitesStore = defineStore('sites', {
         max_dbm: -60.0,
         overlay_transparency: 50,
       },
+      terrain: {
+        dem_source: '',
+        clutter_source: '',
+        clutter_penetration_factor: null,
+      },
     },
   }),
   actions: {

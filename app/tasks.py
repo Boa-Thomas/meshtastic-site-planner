@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 _redis_client = None
 
 
-def _get_engine(name=None):
-    from app.services.engine_factory import get_engine
-    return get_engine(name)
+def _get_engine_for_request(request):
+    from app.services.engine_factory import get_engine_for_request
+    return get_engine_for_request(request)
 
 
 def _get_redis():
@@ -46,7 +46,7 @@ def run_splat_task(self, task_id: str, request_dict: dict):
     try:
         logger.info(f"[Celery] Starting coverage prediction for task {task_id} (attempt {self.request.retries + 1})")
         request = CoveragePredictionRequest(**request_dict)
-        engine = _get_engine(request.engine)
+        engine = _get_engine_for_request(request)
         geotiff_data = engine.coverage_prediction(request, task_id=task_id)
 
         r.setex(task_id, 3600, geotiff_data)

@@ -40,4 +40,5 @@ def init_db():
     """Create all tables if they don't exist."""
     from app.models.node import Node  # noqa: F401
     from app.models.coverage_site import CoverageSite  # noqa: F401
+    from app.models.calibration_measurement import CalibrationMeasurement  # noqa: F401
     Base.metadata.create_all(bind=engine)

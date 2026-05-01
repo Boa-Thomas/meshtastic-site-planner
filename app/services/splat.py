@@ -26,6 +26,7 @@ from PIL import Image
 
 from app.models.CoveragePredictionRequest import CoveragePredictionRequest
 from app.services.engine import PropagationEngine
+from app.services.clutter import ClutterSource
 from app.services.geotiff_utils import ppm_kml_to_geotiff
 from app.redis_config import DB_SRTM_CACHE, get_redis_client
 from app.metrics import (
@@ -46,14 +47,52 @@ logging.getLogger("s3transfer").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
+# Supported DEM sources. Each entry maps to a default S3 bucket/prefix for tile
+# downloads. The class transcodes non-SRTM sources into SRTM-style .hgt.gz bytes
+# so the rest of the SPLAT! pipeline (srtm2sdf, splat, splat-hd) is unchanged.
+DEM_SOURCES = {
+    "srtm": {
+        "bucket": "elevation-tiles-prod",
+        "prefix": "v2/skadi",
+    },
+    "copernicus": {
+        # Copernicus GLO-30 (DSM, ~30 m). COG GeoTIFFs, 1°×1° tiles.
+        # Open data registry: https://registry.opendata.aws/copernicus-dem/
+        "bucket": "copernicus-dem-30m",
+        "prefix": "",
+    },
+    "fabdem": {
+        # FABDEM (Hawker et al., 2022) — Copernicus DEM with canopy/buildings
+        # removed, i.e. a true DTM. Distributed at https://data.bris.ac.uk/data/
+        # under CC BY-NC-SA 4.0. There is no public AWS Open Data mirror, so
+        # operators must host their own bucket and configure FABDEM_BUCKET /
+        # FABDEM_PREFIX. Defaults below assume an S3-compatible mirror you control.
+        "bucket": os.environ.get("FABDEM_BUCKET", ""),
+        "prefix": os.environ.get("FABDEM_PREFIX", ""),
+    },
+}
+
+# When a FABDEM tile is missing (ocean, gap, mirror not yet populated), fall
+# back to this source. Empty string disables the fallback (raises).
+FABDEM_FALLBACK_SOURCE = os.environ.get("FABDEM_FALLBACK_SOURCE", "copernicus")
+
+# FABDEM filename pattern. The official V1.2 release uses
+# `N35W120_FABDEM_V1-2.tif`. Operators on a different version override this.
+FABDEM_FILENAME_TEMPLATE = os.environ.get(
+    "FABDEM_FILENAME_TEMPLATE", "{ns}{lat:02d}{ew}{lon:03d}_FABDEM_V1-2.tif"
+)
+
+
 class Splat(PropagationEngine):
     def __init__(
         self,
         splat_path: str,
         cache_dir: str = ".splat_tiles",
         cache_size_gb: float = 1.0,
-        bucket_name: str = "elevation-tiles-prod",
-        bucket_prefix:str = "v2/skadi"
+        bucket_name: str | None = None,
+        bucket_prefix: str | None = None,
+        dem_source: str | None = None,
+        clutter_source: ClutterSource | None = None,
     ):
         """
         SPLAT! wrapper class. Provides methods for generating SPLAT! RF coverage maps in GeoTIFF format.
@@ -72,11 +111,24 @@ class Splat(PropagationEngine):
             cache_size_gb (float): Maximum size of the cache in gigabytes (GB). Defaults to 1.0.
                 When the size of the cached tiles exceeds this value, the oldest tiles are deleted
                 and will be re-downloaded as required.
-            bucket_name (str): Name of the S3 bucket containing terrain tiles. Defaults to the AWS
-                open data bucket `elevation-tiles-prod`.
-            bucket_prefix (str): Folder in the S3 bucket containing the terrain tiles. Defaults to
-                `v2/skadi`, which contains 1-arcsecond terrain data for most of the world.
+            bucket_name (str | None): Override S3 bucket for terrain tiles. If None, uses the
+                default for the selected `dem_source`.
+            bucket_prefix (str | None): Override S3 prefix for terrain tiles. If None, uses the
+                default for the selected `dem_source`.
+            dem_source (str | None): Elevation data source. One of: "srtm" (default — NASA SRTM
+                1-arcsec via `elevation-tiles-prod`) or "copernicus" (Copernicus GLO-30 DSM via
+                `copernicus-dem-30m`). Defaults to env var DEM_SOURCE or "srtm".
         """
+
+        resolved_source = (dem_source or os.environ.get("DEM_SOURCE", "srtm")).lower().strip()
+        if resolved_source not in DEM_SOURCES:
+            raise ValueError(
+                f"Unknown DEM source '{resolved_source}'. "
+                f"Supported: {sorted(DEM_SOURCES.keys())}"
+            )
+        self.dem_source = resolved_source
+        self.clutter_source = clutter_source
+        source_defaults = DEM_SOURCES[resolved_source]
 
         # Check the provided SPLAT! path exists
         if not os.path.isdir(splat_path):
@@ -143,12 +195,47 @@ class Splat(PropagationEngine):
             retries={"max_attempts": 5, "mode": "adaptive"},
         )
         self.s3 = boto3.client("s3", config=s3_config)
-        self.bucket_name = bucket_name
-        self.bucket_prefix = bucket_prefix
+        self.bucket_name = bucket_name if bucket_name is not None else source_defaults["bucket"]
+        self.bucket_prefix = bucket_prefix if bucket_prefix is not None else source_defaults["prefix"]
 
         logger.info(
-            f"Initialized SPLAT! with terrain tile cache at '{cache_dir}' with a size limit of {cache_size_gb} GB."
+            f"Initialized SPLAT! with terrain tile cache at '{cache_dir}' "
+            f"(size limit {cache_size_gb} GB, dem_source={self.dem_source}, "
+            f"bucket={self.bucket_name}/{self.bucket_prefix or '<root>'})."
         )
+
+    # ------------------------------------------------------------------
+    # Cache-key helpers (namespaced by DEM source + clutter source so tiles
+    # from different terrain/clutter combinations never collide)
+    # ------------------------------------------------------------------
+    @property
+    def _cache_namespace(self) -> str:
+        """Cache namespace combining DEM source, clutter source and factor.
+
+        When clutter is disabled, the namespace is just the DEM source — this
+        keeps existing caches valid when no clutter override is configured.
+
+        When clutter is on, the penetration factor is folded into the
+        namespace because it scales the canopy heights baked into each cached
+        tile. Two requests with different factors must NOT share tiles.
+        """
+        if self.clutter_source is None:
+            return self.dem_source
+        # Quantize the factor to 2 decimals so 0.6 and 0.6000001 share a key
+        # (the factor only matters to ~0.05 anyway — calibration noise floor).
+        factor = round(self.clutter_source.penetration_factor, 2)
+        return f"{self.dem_source}+{self.clutter_source.name}@{factor:.2f}"
+
+    def _disk_key(self, name: str) -> str:
+        """Disk LRU key — namespaced by DEM + clutter source."""
+        return f"{self._cache_namespace}:{name}"
+
+    def tile_redis_key(self, tile_name: str) -> str:
+        """Redis HGT cache key — namespaced by DEM + clutter source."""
+        return f"dem:{self._cache_namespace}:hgt:{tile_name}"
+
+    def _sdf_redis_key(self, sdf_filename: str) -> str:
+        return f"dem:{self._cache_namespace}:sdf:{sdf_filename}"
 
     @property
     def name(self) -> str:
@@ -305,8 +392,13 @@ class Splat(PropagationEngine):
                     "-R",
                     str(request.radius / 1000.0),
                     "-sc",
-                    "-gc",
-                    str(request.clutter_height),
+                ]
+                # When spatial clutter is active, vegetation is already baked
+                # into the SDF as synthetic terrain — adding `-gc` on top would
+                # double-count the obstruction. Skip the uniform knob.
+                if self.clutter_source is None:
+                    splat_command += ["-gc", str(request.clutter_height)]
+                splat_command += [
                     "-ngs",
                     "-N",
                     "-o",
@@ -315,8 +407,9 @@ class Splat(PropagationEngine):
                     "-db",
                     str(request.signal_threshold),
                     "-kml",
-                    "-olditm"
-                ] # flag "olditm" uses the standard ITM model instead of ITWOM, which has produced unrealistic results.
+                    "-olditm",
+                ]
+                # flag "olditm" uses the standard ITM model instead of ITWOM, which has produced unrealistic results.
                 logger.debug(f"Executing SPLAT! command: {' '.join(splat_command)}")
 
                 splat_binary_label = "splat-hd" if request.high_resolution else "splat"
@@ -729,58 +822,254 @@ class Splat(PropagationEngine):
             Exception: If the tile cannot be downloaded from S3.
         """
         # Track popularity for the prefetch worker (best-effort, fire-and-forget).
+        # Popularity ranking is per-source so prefetch warms the active source only.
+        access_zset = f"dem:{self.dem_source}:access"
         if self._redis_tile_cache is not None:
             try:
-                self._redis_tile_cache.zincrby("srtm:access", 1, tile_name)
+                self._redis_tile_cache.zincrby(access_zset, 1, tile_name)
             except Exception:
                 pass
 
-        if tile_name in self.tile_cache:
-            logger.info(f"Cache hit (disk): {tile_name}")
+        disk_key = self._disk_key(tile_name)
+        if disk_key in self.tile_cache:
+            logger.info(f"Cache hit (disk): {disk_key}")
             inc(srtm_cache_events_total, tier="disk", event="hit")
-            return self.tile_cache[tile_name]
+            return self.tile_cache[disk_key]
 
-        redis_key = f"srtm:hgt:{tile_name}"
+        redis_key = self.tile_redis_key(tile_name)
         if self._redis_tile_cache is not None:
             try:
                 cached = self._redis_tile_cache.get(redis_key)
                 if cached:
-                    logger.info(f"Cache hit (redis): {tile_name}")
+                    logger.info(f"Cache hit (redis): {disk_key}")
                     inc(srtm_cache_events_total, tier="redis", event="hit")
-                    self.tile_cache[tile_name] = cached
+                    self.tile_cache[disk_key] = cached
                     return cached
             except Exception as e:
-                logger.debug(f"Redis HGT cache read failed for {tile_name}: {e}")
+                logger.debug(f"Redis HGT cache read failed for {disk_key}: {e}")
 
         inc(srtm_cache_events_total, tier="s3", event="miss")
 
-        # Download the tile from S3 if not in cache
+        if self.dem_source == "copernicus":
+            tile_data = self._download_copernicus_tile(tile_name)
+        elif self.dem_source == "fabdem":
+            tile_data = self._download_fabdem_tile(tile_name)
+        else:
+            tile_data = self._download_srtm_tile(tile_name)
+
+        # Spatial clutter (Phase C): fold canopy heights into the .hgt before
+        # caching so the SDF that gets generated downstream sees a synthetic
+        # DSM and SPLAT! treats vegetation as terrain.
+        if self.clutter_source is not None:
+            tile_data = self._apply_clutter(tile_data, tile_name)
+
+        self._cache_tile(tile_name, redis_key, tile_data)
+        return tile_data
+
+    def _apply_clutter(self, tile_data: bytes, tile_name: str) -> bytes:
+        """Add canopy height (× penetration factor) on top of a DTM tile.
+
+        The DTM is delivered as a .hgt.gz buffer (3601×3601 int16 big-endian).
+        We decode it, sum the canopy raster, clip to int16 range, and re-encode.
+        If no canopy tile exists for this 1°×1° cell, we return the DTM untouched.
+        """
+        canopy = self.clutter_source.get_effective_height_grid(tile_name)
+        if canopy is None:
+            return tile_data
+        raw = gzip.decompress(tile_data)
+        dtm = np.frombuffer(raw, dtype=">i2").reshape(3601, 3601).astype("float32")
+        # Preserve void cells (-32768) — adding canopy to a void is meaningless
+        # and would corrupt the sentinel.
+        void_mask = dtm <= -1000
+        synthetic = np.where(void_mask, dtm, dtm + canopy)
+        # Clip to int16 range. Real terrain + canopy will never approach the
+        # bounds, but defend against malformed canopy data.
+        synthetic = np.clip(synthetic, -32768, 32767).astype(">i2")
+        buf = io.BytesIO()
+        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+            gz.write(synthetic.tobytes())
+        logger.info(
+            f"Applied clutter ({self.clutter_source.name}, "
+            f"factor={self.clutter_source.penetration_factor}) to {tile_name}"
+        )
+        return buf.getvalue()
+
+    def _download_srtm_tile(self, tile_name: str) -> bytes:
+        """Fetch a raw SRTM .hgt.gz tile from the configured S3 bucket."""
         tile_dir_prefix = tile_name[:3]
-        s3_key = f"{self.bucket_prefix}/{tile_dir_prefix}/{tile_name}"
+        s3_key = f"{self.bucket_prefix}/{tile_dir_prefix}/{tile_name}" if self.bucket_prefix else f"{tile_dir_prefix}/{tile_name}"
         logger.info(f"Downloading {tile_name} from {self.bucket_name}/{s3_key}...")
         try:
             obj = self.s3.get_object(Bucket=self.bucket_name, Key=s3_key)
-            tile_data = obj['Body'].read()
-            self._cache_tile(tile_name, redis_key, tile_data)
-            return tile_data
+            return obj['Body'].read()
         except ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchKey':
                 logger.info(f"Tile {tile_name} not found in S3 bucket, trying to download V1 SRTM data instead: {e}")
                 s3_key = f"skadi/{tile_dir_prefix}/{tile_name}"
                 obj = self.s3.get_object(Bucket=self.bucket_name, Key=s3_key)
-                tile_data = obj['Body'].read()
-                self._cache_tile(tile_name, redis_key, tile_data)
-                return tile_data
-            else:
-                logger.error(f"Failed to download {tile_name} from S3 due to ClientError: {e}")
-                raise
+                return obj['Body'].read()
+            logger.error(f"Failed to download {tile_name} from S3 due to ClientError: {e}")
+            raise
         except Exception as e:
             logger.error(f"Failed to download {tile_name} from S3: {e}")
             raise
 
+    def _download_copernicus_tile(self, tile_name: str) -> bytes:
+        """Fetch a Copernicus GLO-30 COG and transcode it to SRTM-style .hgt.gz bytes.
+
+        Copernicus tiles are GeoTIFFs in the public S3 bucket `copernicus-dem-30m`.
+        The downstream pipeline expects raw .hgt.gz (16-bit big-endian, 3601×3601
+        for 1-arcsec); we resample/encode here so srtm2sdf doesn't need to know
+        about COGs.
+
+        Args:
+            tile_name: SRTM-style filename, e.g. ``N35W120.hgt.gz`` (used as cache key).
+
+        Returns:
+            bytes: gzipped raw HGT, drop-in for the SRTM path.
+        """
+        cop_key = self._copernicus_s3_key(tile_name)
+        logger.info(f"Downloading Copernicus tile {tile_name} from {self.bucket_name}/{cop_key}...")
+        try:
+            obj = self.s3.get_object(Bucket=self.bucket_name, Key=cop_key)
+            cog_bytes = obj["Body"].read()
+        except ClientError as e:
+            # Copernicus, like SRTM, has no tiles over open ocean. Surface a clear error.
+            if e.response["Error"]["Code"] == "NoSuchKey":
+                logger.warning(f"Copernicus tile not found at {cop_key} (likely ocean / no land coverage)")
+            raise
+
+        return self._cog_to_hgt_gz(cog_bytes)
+
+    def _download_fabdem_tile(self, tile_name: str) -> bytes:
+        """Fetch a FABDEM tile from the configured (operator-hosted) S3 bucket.
+
+        FABDEM is CC BY-NC-SA, no public AWS Open Data mirror. If the tile is
+        missing and `FABDEM_FALLBACK_SOURCE` is set, we transparently fall back
+        to that DEM (typically Copernicus) so coastal / partially-covered areas
+        keep working. The fallback is logged so operators can spot patchy
+        coverage.
+
+        Args:
+            tile_name: SRTM-style filename used as cache key.
+
+        Returns:
+            bytes: gzipped raw HGT (drop-in for the SRTM path).
+        """
+        if not self.bucket_name:
+            raise RuntimeError(
+                "FABDEM is selected but FABDEM_BUCKET is not configured. "
+                "Set FABDEM_BUCKET (and optionally FABDEM_PREFIX) to your "
+                "operator-hosted S3 mirror."
+            )
+
+        cop_key = self._fabdem_s3_key(tile_name)
+        full_key = f"{self.bucket_prefix.rstrip('/')}/{cop_key}" if self.bucket_prefix else cop_key
+        logger.info(f"Downloading FABDEM tile {tile_name} from {self.bucket_name}/{full_key}...")
+        try:
+            obj = self.s3.get_object(Bucket=self.bucket_name, Key=full_key)
+            cog_bytes = obj["Body"].read()
+            return self._cog_to_hgt_gz(cog_bytes)
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "NoSuchKey":
+                raise
+            if not FABDEM_FALLBACK_SOURCE:
+                logger.warning(f"FABDEM tile {tile_name} missing and no fallback configured")
+                raise
+            logger.info(
+                f"FABDEM tile {tile_name} missing; falling back to "
+                f"{FABDEM_FALLBACK_SOURCE} for this tile only"
+            )
+            return self._download_with_alternate_source(tile_name, FABDEM_FALLBACK_SOURCE)
+
+    def _download_with_alternate_source(self, tile_name: str, alt_source: str) -> bytes:
+        """One-shot download using a different DEM source (used by the FABDEM fallback).
+
+        Does NOT touch caches under the alternate source's namespace — the
+        result is stored under the *current* source's key by `_cache_tile`,
+        which is what the caller wants (so a future request for the same tile
+        with FABDEM active still hits cache).
+        """
+        if alt_source not in DEM_SOURCES:
+            raise ValueError(f"Unknown fallback source: {alt_source}")
+        # Temporarily override bucket/prefix to the alternate source's defaults.
+        original_bucket = self.bucket_name
+        original_prefix = self.bucket_prefix
+        original_source = self.dem_source
+        try:
+            alt_defaults = DEM_SOURCES[alt_source]
+            self.bucket_name = alt_defaults["bucket"]
+            self.bucket_prefix = alt_defaults["prefix"]
+            self.dem_source = alt_source
+            if alt_source == "copernicus":
+                return self._download_copernicus_tile(tile_name)
+            elif alt_source == "srtm":
+                return self._download_srtm_tile(tile_name)
+            elif alt_source == "fabdem":
+                return self._download_fabdem_tile(tile_name)
+            raise ValueError(f"Unsupported fallback source: {alt_source}")
+        finally:
+            self.bucket_name = original_bucket
+            self.bucket_prefix = original_prefix
+            self.dem_source = original_source
+
+    @staticmethod
+    def _fabdem_s3_key(tile_name: str) -> str:
+        """Map an SRTM-style filename to the configured FABDEM filename.
+
+        Example with default template: ``N35W120.hgt.gz`` → ``N35W120_FABDEM_V1-2.tif``.
+        """
+        ns = tile_name[0]
+        lat = int(tile_name[1:3])
+        ew = tile_name[3]
+        lon = int(tile_name[4:7])
+        return FABDEM_FILENAME_TEMPLATE.format(ns=ns, ew=ew, lat=lat, lon=lon)
+
+    @staticmethod
+    def _copernicus_s3_key(tile_name: str) -> str:
+        """Map an SRTM-style filename to a Copernicus GLO-30 S3 key.
+
+        Example: ``N35W120.hgt.gz`` →
+        ``Copernicus_DSM_COG_10_N35_00_W120_00_DEM/Copernicus_DSM_COG_10_N35_00_W120_00_DEM.tif``
+        """
+        ns = tile_name[0]
+        lat = int(tile_name[1:3])
+        ew = tile_name[3]
+        lon = int(tile_name[4:7])
+        prefix = f"Copernicus_DSM_COG_10_{ns}{lat:02d}_00_{ew}{lon:03d}_00_DEM"
+        return f"{prefix}/{prefix}.tif"
+
+    @staticmethod
+    def _cog_to_hgt_gz(cog_bytes: bytes) -> bytes:
+        """Resample a 1°×1° DEM COG to a 3601×3601 int16 big-endian .hgt.gz buffer.
+
+        Copernicus GLO-30 tiles vary in column count by latitude (cosine
+        compression at high latitudes); we resample everything back to a regular
+        3601×3601 grid so GDAL's SRTMHGT driver can parse the result. NoData and
+        non-finite values are encoded as -32768, matching the SRTM convention.
+        """
+        with rasterio.MemoryFile(cog_bytes) as memfile:
+            with memfile.open() as src:
+                data = src.read(
+                    1,
+                    out_shape=(3601, 3601),
+                    resampling=Resampling.bilinear,
+                ).astype("float32")
+                src_nodata = src.nodata
+
+        if src_nodata is not None:
+            data = np.where(data == src_nodata, -32768.0, data)
+        # SRTM convention: anything below -1000 m is treated as void.
+        data = np.where(np.isfinite(data) & (data > -1000), data, -32768.0)
+        arr = data.astype(">i2")  # int16 big-endian — exactly what srtm2sdf expects
+        buf = io.BytesIO()
+        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+            gz.write(arr.tobytes())
+        return buf.getvalue()
+
     def _cache_tile(self, tile_name: str, redis_key: str, tile_data: bytes) -> None:
         """Persist a downloaded tile to both diskcache and Redis (best-effort)."""
-        self.tile_cache[tile_name] = tile_data
+        self.tile_cache[self._disk_key(tile_name)] = tile_data
         if self._redis_tile_cache is not None and SRTM_REDIS_TTL > 0:
             try:
                 self._redis_tile_cache.setex(redis_key, SRTM_REDIS_TTL, tile_data)
@@ -818,22 +1107,23 @@ class Splat(PropagationEngine):
         """
 
         sdf_filename = Splat._hgt_filename_to_sdf_filename(tile_name, high_resolution)
+        sdf_disk_key = self._disk_key(sdf_filename)
 
         # Check cache for converted file
-        if sdf_filename in self.tile_cache:
-            logger.info(f"Cache hit (disk): {sdf_filename}")
-            return self.tile_cache[sdf_filename]
+        if sdf_disk_key in self.tile_cache:
+            logger.info(f"Cache hit (disk): {sdf_disk_key}")
+            return self.tile_cache[sdf_disk_key]
 
-        sdf_redis_key = f"srtm:sdf:{sdf_filename}"
+        sdf_redis_key = self._sdf_redis_key(sdf_filename)
         if self._redis_tile_cache is not None:
             try:
                 cached_sdf = self._redis_tile_cache.get(sdf_redis_key)
                 if cached_sdf:
-                    logger.info(f"Cache hit (redis): {sdf_filename}")
-                    self.tile_cache[sdf_filename] = cached_sdf
+                    logger.info(f"Cache hit (redis): {sdf_disk_key}")
+                    self.tile_cache[sdf_disk_key] = cached_sdf
                     return cached_sdf
             except Exception as e:
-                logger.debug(f"Redis SDF cache read failed for {sdf_filename}: {e}")
+                logger.debug(f"Redis SDF cache read failed for {sdf_disk_key}: {e}")
 
         # Create temporary working directory
         with tempfile.TemporaryDirectory() as tmpdir:

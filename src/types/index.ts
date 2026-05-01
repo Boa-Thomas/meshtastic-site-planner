@@ -45,6 +45,30 @@ export interface SplatParams {
     max_dbm: number
     overlay_transparency: number
   }
+  terrain?: {
+    /** Server-side DEM override; empty string = use server default. */
+    dem_source: '' | 'srtm' | 'copernicus' | 'fabdem'
+    /** Spatial clutter override; 'none' disables, '' = use server default. */
+    clutter_source: '' | 'none' | 'lang2023' | 'mapbiomas' | 'custom'
+    /** Penetration factor override (0..1); null = use server default. */
+    clutter_penetration_factor: number | null
+  }
+}
+
+/** Terrain pipeline metadata returned by GET /api/settings/terrain. */
+export interface TerrainSettings {
+  defaults: {
+    dem_source: string
+    clutter_source: string
+    clutter_penetration_factor: number
+    fabdem_fallback_source: string
+  }
+  dem_sources: Array<{ id: string; ready: boolean; note: string | null }>
+  clutter_sources: Array<{ id: string; ready: boolean; note: string | null }>
+  calibration: {
+    factor_calibrated: boolean
+    calibration_notes: string
+  }
 }
 
 // ---------------------------------------------------------------------------
