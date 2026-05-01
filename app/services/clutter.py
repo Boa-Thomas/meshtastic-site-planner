@@ -41,36 +41,39 @@ from rasterio.enums import Resampling
 
 logger = logging.getLogger(__name__)
 
-# Known canopy datasets and their default bucket/prefix conventions. Operators
-# can still override everything via env vars; this just gives sensible defaults
-# per source name.
+# Known canopy datasets and their default filename templates. Buckets and
+# prefixes are resolved on demand by `clutter_source_config` so that env-var
+# changes (e.g. in tests via monkeypatch) take effect without reloading the
+# module. The dict here is the set of *names* the system recognises.
 CLUTTER_SOURCES = {
     "lang2023": {
-        # ETH Global Canopy Height 10 m, Lang et al. 2023.
-        # No public AWS Open Data mirror; defaults assume an operator mirror.
-        "bucket": os.environ.get("CLUTTER_BUCKET", ""),
-        "prefix": os.environ.get("CLUTTER_PREFIX", ""),
-        "filename_template": os.environ.get(
-            "CLUTTER_FILENAME_TEMPLATE", "{ns}{lat:02d}{ew}{lon:03d}.tif"
-        ),
+        "default_filename_template": "{ns}{lat:02d}{ew}{lon:03d}.tif",
     },
     "mapbiomas": {
-        # MapBiomas Brazil annual vegetation height. Brazil-only.
-        "bucket": os.environ.get("CLUTTER_BUCKET", ""),
-        "prefix": os.environ.get("CLUTTER_PREFIX", ""),
-        "filename_template": os.environ.get(
-            "CLUTTER_FILENAME_TEMPLATE", "mapbiomas_{ns}{lat:02d}{ew}{lon:03d}.tif"
-        ),
+        "default_filename_template": "mapbiomas_{ns}{lat:02d}{ew}{lon:03d}.tif",
     },
     "custom": {
-        # Fully operator-defined. Requires CLUTTER_BUCKET to be set.
+        "default_filename_template": "{ns}{lat:02d}{ew}{lon:03d}.tif",
+    },
+}
+
+
+def clutter_source_config(name: str) -> dict:
+    """Resolve a clutter source's bucket/prefix/template from env vars.
+
+    Built lazily so tests (and hot-reload scenarios) see the current env state
+    instead of whatever was set when the module was imported.
+    """
+    if name not in CLUTTER_SOURCES:
+        raise KeyError(f"Unknown clutter source: {name}")
+    return {
         "bucket": os.environ.get("CLUTTER_BUCKET", ""),
         "prefix": os.environ.get("CLUTTER_PREFIX", ""),
         "filename_template": os.environ.get(
-            "CLUTTER_FILENAME_TEMPLATE", "{ns}{lat:02d}{ew}{lon:03d}.tif"
+            "CLUTTER_FILENAME_TEMPLATE",
+            CLUTTER_SOURCES[name]["default_filename_template"],
         ),
-    },
-}
+    }
 
 
 class ClutterSource:
@@ -164,7 +167,7 @@ def make_clutter_source_from_env() -> Optional[ClutterSource]:
             f"Unknown CLUTTER_SOURCE '{src}'. "
             f"Supported: {sorted(CLUTTER_SOURCES.keys())}"
         )
-    cfg = CLUTTER_SOURCES[src]
+    cfg = clutter_source_config(src)
     penetration = float(os.environ.get("CLUTTER_PENETRATION_FACTOR", "0.6"))
     return ClutterSource(
         name=src,

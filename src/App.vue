@@ -178,6 +178,19 @@
                 </ul>
               </li>
 
+              <!-- 4b. Terrain & Clutter -->
+              <li class="nav-item">
+                <a class="nav-link dropdown-toggle" href="#" role="button"
+                   @click.prevent="togglePanel('terrain')"
+                   :aria-expanded="openPanels.has('terrain')">Terrain &amp; Clutter</a>
+                <ul :class="['dropdown-menu', 'dropdown-menu-dark', 'p-3', { show: openPanels.has('terrain') }]"
+                    style="position:static">
+                  <li>
+                    <TerrainConfig />
+                  </li>
+                </ul>
+              </li>
+
               <!-- 5. Network Simulation (DES) -->
               <li class="nav-item">
                 <a class="nav-link dropdown-toggle" href="#" role="button"
@@ -249,6 +262,7 @@ import { reactive } from 'vue'
 import Environment from "./components/Environment.vue"
 import Simulation from "./components/Simulation.vue"
 import Display from "./components/Display.vue"
+import TerrainConfig from "./components/TerrainConfig.vue"
 import NodeList from "./components/NodeList.vue"
 import NodeEditor from "./components/NodeEditor.vue"
 import DesControls from "./components/des/DesControls.vue"
@@ -684,7 +698,20 @@ function buildPayload(node: MeshNode, radiusM: number, highRes: boolean) {
     environment: sitesStore.splatParams.environment,
     simulation: sitesStore.splatParams.simulation,
     display: sitesStore.splatParams.display,
+    terrain: sitesStore.splatParams.terrain,
   })
+
+  // Terrain overrides — only included when the user picked a non-default
+  // value, so the server keeps applying its env-var-driven defaults otherwise.
+  const terrainOverrides: Record<string, unknown> = {}
+  const terrain = sitesStore.splatParams.terrain
+  if (terrain) {
+    if (terrain.dem_source) terrainOverrides.dem_source = terrain.dem_source
+    if (terrain.clutter_source) terrainOverrides.clutter_source = terrain.clutter_source
+    if (terrain.clutter_penetration_factor !== null) {
+      terrainOverrides.clutter_penetration_factor = terrain.clutter_penetration_factor
+    }
+  }
 
   return {
     splatParams,
@@ -709,6 +736,7 @@ function buildPayload(node: MeshNode, radiusM: number, highRes: boolean) {
       situation_fraction: splatParams.simulation.situation_fraction,
       time_fraction: splatParams.simulation.time_fraction,
       high_resolution: highRes,
+      ...terrainOverrides,
     },
   }
 }

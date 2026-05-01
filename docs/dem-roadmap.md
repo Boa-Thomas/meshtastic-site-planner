@@ -139,16 +139,109 @@ docker-compose up
 
 ---
 
-## Próximos passos (operacionais, não de código)
+## Ferramentas operacionais (Fase D — entregue)
+
+A camada de código está pronta; o que falta é trabalho operacional. As
+ferramentas abaixo cobrem os três gaps que sobraram do PR original:
+
+### `utils/mirror_terrain.py` — ingestão de mirror
+
+CLI para popular um bucket S3 (FABDEM, Lang 2023, MapBiomas, etc.) a partir
+de uma fonte (HTTP, S3 origem, ou diretório local). Faz validação por tile
+(magic number TIFF + faixa de elevação plausível com rasterio) e emite um
+`manifest.json` com tudo o que foi enviado.
+
+```bash
+# Listar tiles que cobrem São Paulo
+python utils/mirror_terrain.py list --bbox=-25,-49,-23,-46
+
+# Popular um bucket FABDEM a partir de URLs HTTP
+python utils/mirror_terrain.py ingest \
+    --dataset fabdem --bbox=-25,-49,-23,-46 \
+    --source-url "https://example.org/{tile}_FABDEM_V1-2.tif" \
+    --dest-bucket meu-mirror --dest-prefix fabdem-v1-2
+
+# Verificar integridade depois
+python utils/mirror_terrain.py verify \
+    --dataset fabdem --bbox=-25,-49,-23,-46 \
+    --dest-bucket meu-mirror --dest-prefix fabdem-v1-2 --deep
+```
+
+Não precisa rodar dentro do container — é um helper offline.
+
+### `GET /api/settings/terrain` — config visível à UI
+
+Expõe (read-only) qual DEM/clutter source está ativo no servidor, quais
+sources estão "ready" (bucket configurado) e se o `CLUTTER_PENETRATION_FACTOR`
+foi calibrado. A UI usa isso para popular dropdowns e mostrar avisos
+("uncalibrated default").
+
+### Override por request
+
+`POST /predict` agora aceita 3 campos opcionais:
+
+- `dem_source: "srtm" | "copernicus" | "fabdem"` — sobrepõe a env var.
+- `clutter_source: "none" | "lang2023" | "mapbiomas" | "custom"`.
+- `clutter_penetration_factor: 0.0..1.0`.
+
+Quando ausentes, o servidor usa os defaults do env. As caches (Redis HGT/SDF
+e o fuzzy bbox cache) são namespaced pela combinação completa, incluindo o
+factor (quantizado a 2 casas), então requests com diferentes parâmetros nunca
+poluem cache uma da outra.
+
+### Pipeline de calibração
+
+`POST /api/calibration/measurements` aceita observações reais de RSSI:
+
+```json
+{
+  "tx_lat": -23.55, "tx_lon": -46.63,
+  "rx_lat": -23.51, "rx_lon": -46.59,
+  "rssi_dbm": -98, "frequency_mhz": 915,
+  "tx_power_dbm": 20, "tx_gain_dbi": 3,
+  "tx_height_m": 6, "rx_gain_dbi": 2, "rx_height_m": 1.5,
+  "dem_source": "fabdem", "clutter_source": "lang2023",
+  "clutter_penetration_factor": 0.6,
+  "source": "manual"
+}
+```
+
+Endpoints relacionados:
+- `GET /api/calibration/measurements` — listar (com filtros).
+- `GET /api/calibration/summary` — agregação por (DEM, clutter).
+- `DELETE /api/calibration/measurements/{id}` — remover entrada.
+
+`utils/calibrate_clutter.py` consome esses dados, varre uma malha de
+penetration factors candidatos, roda `/predict` para cada combinação,
+amostra o RSSI predito no ponto RX (a partir do GeoTIFF) e reporta o factor
+que minimiza MAE.
+
+```bash
+python utils/calibrate_clutter.py \
+    --api-base http://localhost:8080 \
+    --dem-source fabdem --clutter-source lang2023 \
+    --factors 0.3,0.4,0.5,0.6,0.7,0.8 \
+    --output calibration-result.json
+```
+
+O script usa cache local (`calibration-cache.json` por padrão) para que
+re-execuções só rodem combinações novas.
+
+## Próximos passos (operacionais)
 
 1. **Validar Fase A em prod:** habilitar `DEM_SOURCE=copernicus` para
    uma fração de tráfego, comparar previsão vs. SRTM.
 2. **Hospedar FABDEM:** stand up de bucket S3/R2 (mirror Brasil-only é
-   suficiente como MVP, fallback para Copernicus já está pronto).
+   suficiente como MVP, fallback para Copernicus já está pronto). Use
+   `utils/mirror_terrain.py ingest` para popular o bucket.
 3. **Hospedar canopy height:** Lang 2023 (global) ou MapBiomas (BR).
-4. **Calibrar `CLUTTER_PENETRATION_FACTOR`** contra medições reais —
-   esse é o único parâmetro que precisa de dados de campo.
-5. **Considerar UI exposing source choice:** hoje é só env var.
+   Mesmo fluxo.
+4. **Coletar RSSI real:** integração com gateway MQTT do Meshtastic
+   ou import manual de planilhas via `POST /api/calibration/measurements`.
+   Sem ≥ 30 medições, calibração estatística não faz sentido.
+5. **Rodar `calibrate_clutter.py`** assim que o corpus passar de ~50
+   pontos. Setar `CLUTTER_PENETRATION_FACTOR` e `CLUTTER_FACTOR_CALIBRATED=true`
+   no env do container e remover o aviso da UI.
 
 ## Métricas de sucesso
 

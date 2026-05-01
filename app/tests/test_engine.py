@@ -61,12 +61,14 @@ class TestEngineFactory:
         assert ef.DEFAULT_ENGINE == os.environ.get("PROPAGATION_ENGINE", "splat")
 
     def test_factory_caches_instances(self):
-        """Factory should return the same instance for the same engine name."""
+        """Factory should return the same instance for the same configuration."""
         import app.services.engine_factory as ef
         ef._engines.clear()
-        # Mock a simple engine
+        # Mock a simple engine. The cache key is now a 4-tuple
+        # (engine_name, dem_source, clutter_source_name, factor).
         mock_engine = MagicMock(spec=PropagationEngine)
         mock_engine.is_available.return_value = True
-        ef._engines["test_engine"] = mock_engine
+        cache_key = ("test_engine", "srtm", "none", 0.6)
+        ef._engines[cache_key] = mock_engine
         result = ef.get_engine("test_engine")
         assert result is mock_engine

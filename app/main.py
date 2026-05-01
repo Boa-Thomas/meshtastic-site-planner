@@ -24,7 +24,7 @@ from starlette.requests import Request
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from app.services.engine_factory import get_engine
+from app.services.engine_factory import get_engine, get_engine_for_request
 from app.models.CoveragePredictionRequest import CoveragePredictionRequest
 from app.database import init_db, SessionLocal, RASTER_DIR
 from app.models.coverage_site import CoverageSite
@@ -32,6 +32,8 @@ from app.routers import nodes as nodes_router
 from app.routers import sites as sites_router
 from app.routers import projects as projects_router
 from app.routers import debug as debug_router
+from app.routers import settings as settings_router
+from app.routers import calibration as calibration_router
 from app.metrics import (
     inc,
     measure,
@@ -91,6 +93,8 @@ app.include_router(nodes_router.router)
 app.include_router(sites_router.router)
 app.include_router(projects_router.router)
 app.include_router(debug_router.router)
+app.include_router(settings_router.router)
+app.include_router(calibration_router.router)
 
 def run_splat(task_id: str, request: CoveragePredictionRequest):
     """
@@ -112,7 +116,7 @@ def run_splat(task_id: str, request: CoveragePredictionRequest):
     sim_start = time.perf_counter()
     try:
         logger.info(f"Starting coverage prediction for task {task_id}.")
-        engine = get_engine(request.engine)
+        engine = get_engine_for_request(request)
         geotiff_data = engine.coverage_prediction(request, task_id=task_id)
         sim_status = "success"
 

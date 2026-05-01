@@ -118,6 +118,25 @@ class CoveragePredictionRequest(BaseModel):
         description="Propagation model for Signal Server (e.g., 'itm', 'hata', 'cost231', 'itwom'). Ignored for SPLAT!.",
     )
 
+    # Terrain / clutter overrides — let the caller pick a DEM source and a
+    # spatial clutter dataset on a per-request basis. None means "use whatever
+    # the server is configured for" (env vars). Only applied to the splat
+    # engine; signal_server ignores them.
+    dem_source: Optional[Literal["srtm", "copernicus", "fabdem"]] = Field(
+        None,
+        description="DEM source override. Defaults to the server's DEM_SOURCE env var.",
+    )
+    clutter_source: Optional[Literal["none", "lang2023", "mapbiomas", "custom"]] = Field(
+        None,
+        description="Spatial clutter source override. 'none' disables spatial clutter for this request.",
+    )
+    clutter_penetration_factor: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Override CLUTTER_PENETRATION_FACTOR for this request (0.0 = invisible, 1.0 = solid).",
+    )
+
     def _rf_significant_params(self, lat: float, lon: float) -> dict:
         """Return the dict of RF-significant params using the supplied lat/lon."""
         return {
@@ -143,6 +162,16 @@ class CoveragePredictionRequest(BaseModel):
             "high_resolution": self.high_resolution,
             "engine": self.engine,
             "propagation_model": self.propagation_model,
+            # Terrain identity is part of the RF-significant set: different DEM
+            # / clutter combinations produce different coverage maps, so the
+            # cache must distinguish them.
+            "dem_source": self.dem_source,
+            "clutter_source": self.clutter_source,
+            "clutter_penetration_factor": (
+                round(self.clutter_penetration_factor, 3)
+                if self.clutter_penetration_factor is not None
+                else None
+            ),
         }
 
     def rf_param_hash(self) -> str:

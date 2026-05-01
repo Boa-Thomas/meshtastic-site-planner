@@ -182,9 +182,10 @@ class TestCacheNamespaceWithClutter:
     def test_clutter_appended_to_namespace(self):
         stub = _StubClutterSource(canopy_grid=None)
         s = self._make_splat("fabdem", stub)
-        assert s._cache_namespace == "fabdem+stub"
-        assert s.tile_redis_key("S23W046.hgt.gz") == "dem:fabdem+stub:hgt:S23W046.hgt.gz"
-        assert s._sdf_redis_key("-23:-22:45:46.sdf") == "dem:fabdem+stub:sdf:-23:-22:45:46.sdf"
+        # Stub's penetration_factor is 1.0 → quantized to "1.00" in namespace.
+        assert s._cache_namespace == "fabdem+stub@1.00"
+        assert s.tile_redis_key("S23W046.hgt.gz") == "dem:fabdem+stub@1.00:hgt:S23W046.hgt.gz"
+        assert s._sdf_redis_key("-23:-22:45:46.sdf") == "dem:fabdem+stub@1.00:sdf:-23:-22:45:46.sdf"
 
     def test_different_clutter_sources_have_different_namespaces(self):
         a = self._make_splat("copernicus", _StubClutterSource(canopy_grid=None))

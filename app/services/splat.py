@@ -210,14 +210,21 @@ class Splat(PropagationEngine):
     # ------------------------------------------------------------------
     @property
     def _cache_namespace(self) -> str:
-        """Cache namespace combining DEM source and (optional) clutter source.
+        """Cache namespace combining DEM source, clutter source and factor.
 
         When clutter is disabled, the namespace is just the DEM source — this
-        keeps existing caches valid across the Phase C upgrade.
+        keeps existing caches valid when no clutter override is configured.
+
+        When clutter is on, the penetration factor is folded into the
+        namespace because it scales the canopy heights baked into each cached
+        tile. Two requests with different factors must NOT share tiles.
         """
         if self.clutter_source is None:
             return self.dem_source
-        return f"{self.dem_source}+{self.clutter_source.name}"
+        # Quantize the factor to 2 decimals so 0.6 and 0.6000001 share a key
+        # (the factor only matters to ~0.05 anyway — calibration noise floor).
+        factor = round(self.clutter_source.penetration_factor, 2)
+        return f"{self.dem_source}+{self.clutter_source.name}@{factor:.2f}"
 
     def _disk_key(self, name: str) -> str:
         """Disk LRU key — namespaced by DEM + clutter source."""

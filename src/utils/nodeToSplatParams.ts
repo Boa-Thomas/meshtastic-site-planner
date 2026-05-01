@@ -5,6 +5,7 @@ export interface SharedSettings {
   environment: SplatParams['environment']
   simulation: SplatParams['simulation']
   display: SplatParams['display']
+  terrain?: NonNullable<SplatParams['terrain']>
 }
 
 // Additional system loss in dB based on obstruction level at the site
@@ -79,6 +80,11 @@ export function nodeToSplatParams(node: MeshNode, shared?: SharedSettings): Spla
       min_dbm: -130.0,
       max_dbm: -80.0,
       overlay_transparency: 50,
+    },
+    terrain: shared?.terrain ?? {
+      dem_source: '',
+      clutter_source: '',
+      clutter_penetration_factor: null,
     },
   }
 }
