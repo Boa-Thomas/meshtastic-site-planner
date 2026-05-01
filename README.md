@@ -50,41 +50,34 @@ Key calibration corrections included dual-slope path loss (steeper attenuation b
 
 Go to https://site.meshtastic.org — no installation required.
 
-### Development
-
-Requirements: Node.js 18+, pnpm, Docker, Docker Compose, Git.
+### Self-host (60-second version)
 
 ```bash
 git clone --recurse-submodules https://github.com/meshtastic/meshtastic-site-planner
 cd meshtastic-site-planner
-pnpm i
-pnpm run dev        # Frontend dev server with hot reload (proxies API to :8080)
+./setup.sh                  # Linux / macOS — creates .env, runs docker compose up --build
+# setup.bat on Windows
 ```
 
-### Full Stack (with SPLAT! backend)
+App at http://localhost:8080, Flower at http://localhost:5555.
+
+For everything else — choosing a DEM source, hosting a FABDEM/canopy
+mirror, collecting RSSI, fitting `CLUTTER_PENETRATION_FACTOR` —
+follow the **[Setup Guide](docs/SETUP.md)**.
+
+### Frontend dev mode
 
 ```bash
-# Linux/Mac
-./setup.sh
-
-# Windows
-setup.bat
+pnpm install
+pnpm run dev                # Vite on :5173, proxies API to :8080
 ```
-
-Or manually:
-
-```bash
-cp .env.example .env        # Review and adjust settings
-docker compose up --build   # Build SPLAT! + start all services
-```
-
-This compiles the SPLAT! C++ binary (with MAXPAGES=225 for up to 600 km radius), starts FastAPI, Redis, Celery workers, autoscaler, Nginx, and Let's Encrypt.
 
 ### Tests
 
 ```bash
-pnpm test           # Vitest in watch mode (243 tests)
-pnpm test:e2e       # Playwright E2E tests
+pnpm test                   # Vitest in watch mode (243 tests)
+pnpm test:e2e               # Playwright E2E tests
+docker compose exec app python -m pytest app/tests/ -q   # Backend
 ```
 
 ## Architecture
@@ -189,7 +182,8 @@ The result cache is namespaced by `(dem_source, clutter_source, factor)`
 quantized to 0.01, so different combinations never share tiles. You can
 A/B test sources without invalidating each other.
 
-See [docs/dem-roadmap.md](docs/dem-roadmap.md) for design notes.
+Step-by-step instructions: **[Setup Guide](docs/SETUP.md)**.
+Design notes: [docs/dem-roadmap.md](docs/dem-roadmap.md).
 
 ### Environment Variables
 
