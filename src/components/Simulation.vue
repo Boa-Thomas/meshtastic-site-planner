@@ -32,6 +32,9 @@
                     <input v-model="simulation.high_resolution" type="checkbox" class="form-check-input" id="high_resolution" />
                     <label class="form-check-label" for="high_resolution">Use 30 meter resolution terrain data (default: 90 meter).</label>
                 </div>
+                <small class="text-muted d-block mt-1" v-if="simulation.high_resolution">
+                    HD uses ~9× more memory; the radius is capped at 150 km. Above that the simulation falls back to standard resolution.
+                </small>
             </div>
         </div>
     </form>

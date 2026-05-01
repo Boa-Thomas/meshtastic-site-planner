@@ -9,7 +9,11 @@ to exercise without any external dependencies.
 """
 
 import math
+import os
 import pytest
+from unittest.mock import patch
+
+from app.models.CoveragePredictionRequest import CoveragePredictionRequest
 
 # ---------------------------------------------------------------------------
 # Import guards
@@ -468,3 +472,100 @@ class TestFabdemSourceRegistry:
             src = "not-a-real-source"
             if src not in _S:
                 raise ValueError(f"Unknown DEM source '{src}'.")
+
+
+# ---------------------------------------------------------------------------
+# _apply_radius_caps — high-resolution opt-in & guard rails
+# ---------------------------------------------------------------------------
+
+
+def _make_request(**overrides) -> CoveragePredictionRequest:
+    """Build a valid CoveragePredictionRequest for cap tests."""
+    payload = dict(
+        lat=-23.5505,
+        lon=-46.6333,
+        tx_height=10.0,
+        tx_power=30.0,
+        tx_gain=2.0,
+        frequency_mhz=905.0,
+        rx_height=2.0,
+        rx_gain=1.0,
+        signal_threshold=-100.0,
+        clutter_height=0.0,
+        radius=5000.0,
+    )
+    payload.update(overrides)
+    return CoveragePredictionRequest(**payload)
+
+
+class TestApplyRadiusCaps:
+    """
+    Verify that the HD-mode opt-in works end-to-end:
+      * standard mode: high_resolution=False is preserved
+      * HD mode within its radius cap is preserved (the historical behaviour
+        of force-downgrading every request to standard is gone)
+      * HD mode beyond MAX_HD_RADIUS_KM gracefully falls back to standard
+      * the overall MAX_SIMULATION_RADIUS_KM ceiling still clamps both modes
+    """
+
+    @pytest.fixture(autouse=True)
+    def import_splat(self):
+        from app.services.splat import Splat
+        self.Splat = Splat
+
+    def test_high_resolution_false_is_preserved(self):
+        req = _make_request(radius=10_000.0, high_resolution=False)
+        self.Splat._apply_radius_caps(req)
+        assert req.high_resolution is False
+        assert req.radius == pytest.approx(10_000.0)
+
+    def test_high_resolution_true_under_hd_cap_is_preserved(self):
+        """
+        Regression: previously the service force-set high_resolution=False at
+        the top of coverage_prediction. After the fix, an HD request within
+        the HD-radius cap must reach the SPLAT pipeline as HD.
+        """
+        with patch.dict(os.environ, {"MAX_HD_RADIUS_KM": "150"}, clear=False):
+            req = _make_request(radius=50_000.0, high_resolution=True)
+            self.Splat._apply_radius_caps(req)
+            assert req.high_resolution is True
+            assert req.radius == pytest.approx(50_000.0)
+
+    def test_high_resolution_above_hd_cap_falls_back(self):
+        """HD with radius > MAX_HD_RADIUS_KM downgrades to standard, keeps radius."""
+        with patch.dict(os.environ, {"MAX_HD_RADIUS_KM": "150"}, clear=False):
+            req = _make_request(radius=200_000.0, high_resolution=True)
+            self.Splat._apply_radius_caps(req)
+            assert req.high_resolution is False
+            # Radius is preserved (still under the global 600 km cap).
+            assert req.radius == pytest.approx(200_000.0)
+
+    def test_global_radius_cap_clamps_request(self):
+        """Radius beyond MAX_SIMULATION_RADIUS_KM is clamped, regardless of mode."""
+        with patch.dict(os.environ, {"MAX_SIMULATION_RADIUS_KM": "600"}, clear=False):
+            req = _make_request(radius=900_000.0, high_resolution=False)
+            self.Splat._apply_radius_caps(req)
+            assert req.radius == pytest.approx(600_000.0)
+
+    def test_global_cap_runs_before_hd_cap(self):
+        """
+        A 900 km HD request should be clamped to 600 km by the global cap and
+        then downgraded to standard by the HD cap (default 150 km).
+        """
+        env = {"MAX_SIMULATION_RADIUS_KM": "600", "MAX_HD_RADIUS_KM": "150"}
+        with patch.dict(os.environ, env, clear=False):
+            req = _make_request(radius=900_000.0, high_resolution=True)
+            self.Splat._apply_radius_caps(req)
+            assert req.radius == pytest.approx(600_000.0)
+            assert req.high_resolution is False
+
+    def test_custom_hd_cap_via_env(self):
+        """MAX_HD_RADIUS_KM is honoured as the HD-specific ceiling."""
+        with patch.dict(os.environ, {"MAX_HD_RADIUS_KM": "300"}, clear=False):
+            req = _make_request(radius=250_000.0, high_resolution=True)
+            self.Splat._apply_radius_caps(req)
+            assert req.high_resolution is True
+
+            req2 = _make_request(radius=350_000.0, high_resolution=True)
+            self.Splat._apply_radius_caps(req2)
+            assert req2.high_resolution is False

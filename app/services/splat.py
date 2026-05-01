@@ -282,14 +282,8 @@ class Splat(PropagationEngine):
             try:
                 logger.debug(f"Temporary directory created: {tmpdir}")
 
-                # FIXME: Eventually support high-resolution terrain data
-                request.high_resolution = False
-
-                # Configurable radius cap (MAXPAGES=225 supports ~810km at equator, ~600km at lat 50)
-                max_radius_m = int(os.environ.get("MAX_SIMULATION_RADIUS_KM", "600")) * 1000
-                if request.radius > max_radius_m:
-                    logger.warning(f"Radius {request.radius}m exceeds limit, clamping to {max_radius_m}m.")
-                    request.radius = max_radius_m
+                # Apply radius / HD-radius caps (mutates request in place).
+                Splat._apply_radius_caps(request)
 
                 # determine the required terrain tiles
                 required_tiles = Splat._calculate_required_terrain_tiles(request.lat, request.lon, request.radius)
@@ -477,6 +471,35 @@ class Splat(PropagationEngine):
         target = sdf_hd_name if high_resolution else sdf_name
         with open(os.path.join(tmpdir, target), "wb") as f:
             f.write(sdf_data)
+
+    @staticmethod
+    def _apply_radius_caps(request: CoveragePredictionRequest) -> None:
+        """
+        Clamp the simulation radius and downgrade HD mode when its dedicated
+        cap is exceeded. Mutates `request` in place.
+
+        Two independent caps:
+          * MAX_SIMULATION_RADIUS_KM (default 600) — overall ceiling driven by
+            SPLAT!'s MAXPAGES=225 (~600 km at lat 50, ~810 km at equator).
+          * MAX_HD_RADIUS_KM (default 150) — HD (1-arcsec / splat-hd) needs
+            ~9× the memory and CPU of standard mode, so a separate, lower cap
+            avoids OOM in the 12 GB container when a user toggles HD on.
+        """
+        max_radius_m = int(os.environ.get("MAX_SIMULATION_RADIUS_KM", "600")) * 1000
+        if request.radius > max_radius_m:
+            logger.warning(
+                f"Radius {request.radius}m exceeds limit, clamping to {max_radius_m}m."
+            )
+            request.radius = max_radius_m
+
+        if request.high_resolution:
+            max_hd_radius_m = int(os.environ.get("MAX_HD_RADIUS_KM", "150")) * 1000
+            if request.radius > max_hd_radius_m:
+                logger.warning(
+                    f"HD radius {request.radius}m exceeds HD limit "
+                    f"{max_hd_radius_m}m; falling back to standard resolution."
+                )
+                request.high_resolution = False
 
     @staticmethod
     def _calculate_required_terrain_tiles(
