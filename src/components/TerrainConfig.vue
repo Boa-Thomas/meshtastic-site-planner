@@ -22,6 +22,9 @@
           </option>
         </select>
         <div v-if="demSourceNote" class="form-text text-warning">{{ demSourceNote }}</div>
+        <div v-if="demHeightSemantics" class="form-text small">
+          {{ demHeightSemantics }}
+        </div>
       </div>
 
       <div class="col-12">
@@ -119,6 +122,24 @@ const demSourceNote = computed(() => {
   if (!settings.value || terrain.dem_source === '') return null
   const src = settings.value.dem_sources.find(s => s.id === terrain.dem_source)
   return src?.note ?? null
+})
+
+// Antenna heights are AGL relative to the DEM tile. DSMs already include
+// canopy/buildings so AGL sits above them; DTMs are bare earth so AGL sits
+// above the ground. Surface this so users picking SRTM/Copernicus aren't
+// surprised by simulated heights that look "too high" in vegetated areas.
+const DSM_SOURCES = new Set(['srtm', 'copernicus'])
+const DTM_SOURCES = new Set(['fabdem'])
+const demHeightSemantics = computed(() => {
+  const id = terrain.dem_source
+  if (!id) return null
+  if (DSM_SOURCES.has(id)) {
+    return 'DSM: antenna height (AGL) is added above canopy/buildings, not bare earth. Pick FABDEM if exact ground-relative height matters.'
+  }
+  if (DTM_SOURCES.has(id)) {
+    return 'DTM: antenna height (AGL) is added above bare earth. Vegetation/buildings come from the clutter layer (if enabled).'
+  }
+  return null
 })
 
 const clutterSourceNote = computed(() => {
