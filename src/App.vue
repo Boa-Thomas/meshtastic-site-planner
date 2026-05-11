@@ -212,10 +212,29 @@
 
             <!-- Project & Export buttons -->
             <div class="mt-3 d-flex flex-wrap gap-2">
-              <button :disabled="exportLoading" @click="exportMap" type="button" class="btn btn-secondary btn-sm">
-                <span :class="{ 'd-none': !exportLoading }" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
-                Export PDF
-              </button>
+              <div class="btn-group btn-group-sm" role="group">
+                <button :disabled="exportLoading" @click="exportMap" type="button" class="btn btn-secondary">
+                  <span :class="{ 'd-none': !exportLoading }" class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                  Export PDF
+                </button>
+                <button type="button" class="btn btn-secondary dropdown-toggle dropdown-toggle-split"
+                        data-bs-toggle="dropdown" aria-expanded="false">
+                  <span class="visually-hidden">Toggle export options</span>
+                </button>
+                <ul class="dropdown-menu">
+                  <li>
+                    <button class="dropdown-item" type="button" @click="exportMap">
+                      Quick PDF (screen capture)
+                    </button>
+                  </li>
+                  <li><hr class="dropdown-divider"></li>
+                  <li>
+                    <button class="dropdown-item" type="button" @click="showHiResDialog = true">
+                      High-Resolution Export…
+                    </button>
+                  </li>
+                </ul>
+              </div>
               <button @click="exportProject" :disabled="exporting" type="button" class="btn btn-outline-light btn-sm">
                 <span v-if="exporting" class="spinner-border spinner-border-sm me-1"></span>
                 Export Project
@@ -226,6 +245,7 @@
                 <input type="file" accept=".json" class="d-none" @change="onImportFile" :disabled="importing">
               </label>
             </div>
+            <ExportHiResDialog :show="showHiResDialog" @close="showHiResDialog = false" />
 
             <div v-if="exportError" class="alert alert-warning alert-dismissible mt-2 py-1 px-2 small" role="alert">
               {{ exportError }}
@@ -271,6 +291,7 @@ import DesTraceroute from "./components/des/DesTraceroute.vue"
 import DesMetrics from "./components/des/DesMetrics.vue"
 import DesEventLog from "./components/des/DesEventLog.vue"
 import DebugPanel from "./components/DebugPanel.vue"
+import ExportHiResDialog from "./components/ExportHiResDialog.vue"
 
 import { useSitesStore } from './stores/sitesStore'
 import { useMapStore } from './stores/mapStore'
@@ -287,6 +308,7 @@ const mapStore = useMapStore()
 const nodesStore = useNodesStore()
 const { exportLoading, exportError, exportMap } = useExport()
 const { exportProject, importProject, importing, importError, exporting, exportError: projectExportError } = useProjectIO()
+const showHiResDialog = ref(false)
 useDesVisualization()
 
 async function onImportFile(e: Event) {

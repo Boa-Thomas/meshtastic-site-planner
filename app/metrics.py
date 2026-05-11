@@ -67,6 +67,36 @@ result_cache_hits_total = _make_metric(
     labelnames=("strategy",),
 )
 
+render_requests_total = _make_metric(
+    Counter,
+    "render_requests_total",
+    "High-resolution colorized render requests by kind and outcome",
+    labelnames=("kind", "outcome"),
+)
+
+render_duration_seconds = _make_metric(
+    Histogram,
+    "render_duration_seconds",
+    "Wall-clock time of a /api/render/* call",
+    labelnames=("kind",),
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60),
+)
+
+render_cache_events_total = _make_metric(
+    Counter,
+    "render_cache_events_total",
+    "Render PNG cache events (hit/miss/store/skip)",
+    labelnames=("kind", "event"),
+)
+
+render_output_pixels = _make_metric(
+    Histogram,
+    "render_output_pixels_total",
+    "Number of pixels in a rendered PNG (width*height)",
+    labelnames=("kind",),
+    buckets=(1e5, 1e6, 4e6, 16e6, 64e6, 1e8, 2e8),
+)
+
 
 @contextmanager
 def measure(metric, **labels) -> Iterator[None]:
