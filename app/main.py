@@ -34,6 +34,7 @@ from app.routers import projects as projects_router
 from app.routers import debug as debug_router
 from app.routers import settings as settings_router
 from app.routers import calibration as calibration_router
+from app.routers import render as render_router
 from app.metrics import (
     inc,
     measure,
@@ -95,6 +96,7 @@ app.include_router(projects_router.router)
 app.include_router(debug_router.router)
 app.include_router(settings_router.router)
 app.include_router(calibration_router.router)
+app.include_router(render_router.router)
 
 def run_splat(task_id: str, request: CoveragePredictionRequest):
     """
