@@ -72,7 +72,7 @@ Os seguintes parâmetros são críticos para precisão:
 │   └── generate_colorbars.py
 ├── ui/                     # Frontend compilado (servido pelo FastAPI)
 ├── public/                 # Assets estáticos
-├── Dockerfile              # Build multi-stage (Python + SPLAT! compilado)
+├── Dockerfile              # Build multi-stage (frontend Vite + Python + SPLAT!)
 ├── docker-compose.yml      # Orquestração de 4 serviços
 ├── parameters.md           # Documentação detalhada dos parâmetros do modelo
 └── ISSUES.md               # Catálogo de issues conhecidas (P0-P4)
@@ -93,14 +93,35 @@ Os seguintes parâmetros são críticos para precisão:
 ```bash
 # Frontend (dev)
 pnpm run dev              # Servidor Vite com hot reload (proxy para :8080)
-pnpm run build            # Type-check + build + copia assets
+pnpm run build            # Type-check + build + copia assets → app/ui/
 
 # Stack completa
-docker-compose up --build # Compila SPLAT!, inicia FastAPI + Redis + Nginx
+docker-compose up --build # Compila SPLAT! + builda frontend, inicia FastAPI + Redis + Nginx
 
-# Backend isolado
+# Backend isolado (PRECISA do app/ui/ buildado antes)
+pnpm install && pnpm run build  # Pré-requisito: gera app/ui/
 uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
+
+### Servimento de assets estáticos
+
+O FastAPI serve o frontend via `app/static_files.py::PrecompressedStaticFiles`, um
+subclass de `StaticFiles` que negocia `Accept-Encoding`:
+
+- Quando o cliente aceita `br` ou `gzip` e o sibling `.br`/`.gz` existe no
+  disco (gerado pelo `vite-plugin-compression`), o middleware serve o
+  arquivo comprimido com `Content-Type` original e `Content-Encoding`
+  correto.
+- Caso contrário, fallback para o arquivo raw.
+
+Por isso, em produção (Docker), o `Dockerfile` tem um stage `frontend-builder`
+(Node 20 + pnpm) que produz `app/ui/index.html` + `app/ui/assets/*.js` +
+`*.css` + `.br` + `.gz`. O `.gitignore` ignora os raws `.js`/`.css` em
+`app/ui/assets/` — eles são considerados artefatos de build.
+
+**Importante:** se rodar `uvicorn` localmente fora do Docker, é necessário
+rodar `pnpm run build` antes — senão o navegador recebe 404 nos assets
+referenciados pelo `index.html`.
 
 ## Convenções
 

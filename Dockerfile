@@ -1,3 +1,39 @@
+# =============================================================================
+# Stage 1: frontend-builder
+# -----------------------------------------------------------------------------
+# Build the Vue/Vite frontend ahead of the Python image so the runtime
+# container ships with raw .js/.css *and* their pre-compressed .br/.gz
+# siblings already in place under app/ui/. This decouples local-dev state
+# (the host's app/ui/ may be empty or stale, and the .gitignore excludes
+# raw assets from the repo) from production: the Docker build is now
+# self-sufficient.
+# =============================================================================
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /app
+
+# Use pnpm via corepack so the version is pinned to what the project uses.
+# Lockfile is v9 (pnpm >=9). pnpm@10 reads it correctly.
+RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
+
+# Install deps first — cached as long as the lockfile doesn't change.
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+# Copy the rest of the build inputs. We do this AFTER `pnpm install` so
+# source changes don't bust the dependency cache.
+COPY vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json index.html ./
+COPY src ./src
+COPY public ./public
+
+# `pnpm run build` runs `vue-tsc -b && vite build && cp -r public/* app/ui`.
+# Output: /app/app/ui with index.html + assets/*.js + assets/*.css + .br + .gz.
+RUN pnpm run build
+
+
+# =============================================================================
+# Stage 2: backend runtime (Python + SPLAT!)
+# =============================================================================
 FROM python:3.11-slim
 
 ENV HOME="/root"
@@ -20,8 +56,13 @@ COPY requirements.txt /app/
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application files
+# Copy the rest of the application files. `.dockerignore` excludes
+# `app/ui/` so we don't pollute the image with the host's local (possibly
+# stale) build — the next COPY brings the freshly-built artifacts in.
 COPY . .
+
+# Overlay the freshly-built frontend produced by Stage 1.
+COPY --from=frontend-builder /app/app/ui /app/app/ui
 
 # Change to SPLAT directory and fix line endings + set permissions
 WORKDIR /app/splat
