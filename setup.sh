@@ -57,10 +57,24 @@ else
     info ".env already exists — skipping copy."
 fi
 
-# ── Build and start ──────────────────────────────────────────────────────────
+# ── Build images ─────────────────────────────────────────────────────────────
+# Rebuilds incrementally — Docker's layer cache keeps re-runs fast. Run this
+# script after every `git pull`: without an explicit rebuild step, the
+# existing image is reused and the container silently keeps stale Python/JS.
 
-info "Building and starting all services..."
-$COMPOSE up --build -d
+info "Building Docker images (incremental — uses layer cache)..."
+$COMPOSE build
+
+# ── Start services ───────────────────────────────────────────────────────────
+# `up -d` recreates containers whose image hash changed, so app + workers
+# pick up the fresh build automatically.
+
+info "Starting all services..."
+$COMPOSE up -d
+
+if git rev-parse --short HEAD &>/dev/null; then
+    info "Containers running code at $(git rev-parse --short HEAD)."
+fi
 
 echo ""
 info "Services started. Useful commands:"

@@ -61,16 +61,37 @@ if not exist ".env" (
     echo [INFO]  .env already exists — skipping copy.
 )
 
-REM ── Build and start ────────────────────────────────────────────────────────
+REM ── Build images ───────────────────────────────────────────────────────────
+REM Rebuilds incrementally — Docker's layer cache keeps re-runs fast. Run this
+REM script after every `git pull`: without an explicit rebuild step, the
+REM existing image is reused and the container silently keeps stale Python/JS.
 
 echo.
-echo [INFO]  Building and starting all services...
-%COMPOSE% up --build -d
+echo [INFO]  Building Docker images (incremental — uses layer cache)...
+%COMPOSE% build
+
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Build failed. Check Docker Desktop is running and Dockerfile is valid.
+    exit /b 1
+)
+
+REM ── Start services ─────────────────────────────────────────────────────────
+REM `up -d` recreates containers whose image hash changed, so app + workers
+REM pick up the fresh build automatically.
+
+echo.
+echo [INFO]  Starting all services...
+%COMPOSE% up -d
 
 if %errorlevel% neq 0 (
     echo.
     echo [ERROR] Failed to start services. Check Docker Desktop is running.
     exit /b 1
+)
+
+for /f %%h in ('git rev-parse --short HEAD 2^>nul') do (
+    echo [INFO]  Containers running code at %%h.
 )
 
 echo.
