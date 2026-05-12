@@ -133,6 +133,23 @@ describe('nodeToSplatParams', () => {
     expect(params.transmitter.tx_height).toBeCloseTo(10.0)
   })
 
+  it('applies the same height factor to tx_height and rx_height (symmetry)', () => {
+    // The same node should have the same effective height whether it's the
+    // transmitter or the receiver — otherwise the round-trip link budget is
+    // asymmetric and a SPLAT! coverage map disagrees with the DES engine.
+    for (const installationType of ['portable', 'window', 'rooftop', 'mast', 'tower'] as const) {
+      const node = makeNode({ installationType, antennaHeight: 10 })
+      const params = nodeToSplatParams(node, sharedSettings)
+      expect(params.receiver.rx_height).toBeCloseTo(params.transmitter.tx_height)
+    }
+  })
+
+  it('applies 0.8 height factor to rx_height for portable installation', () => {
+    const node = makeNode({ installationType: 'portable', antennaHeight: 10 })
+    const params = nodeToSplatParams(node, sharedSettings)
+    expect(params.receiver.rx_height).toBeCloseTo(8.0)
+  })
+
   // -----------------------------------------------------------------------
   // Transmitter/Receiver mapping
   // -----------------------------------------------------------------------

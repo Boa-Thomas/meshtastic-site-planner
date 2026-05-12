@@ -30,12 +30,21 @@ const installationHeightFactor: Record<string, number> = {
  * by the /predict API endpoint.
  *
  * Notable transformations:
- * - txHeight is multiplied by the installation-type height factor
+ * - antennaHeight is multiplied by the installation-type height factor and
+ *   applied symmetrically to tx_height and rx_height so the same node gets
+ *   the same effective height whether it acts as transmitter or receiver
  * - obstructionLevel adds extra system loss on the receiver side
  *
  * Note: clutter_height is an environmental path parameter (average canopy
  * along the propagation path) and comes from shared environment settings.
  * Local obstruction at the site is modelled by obstructionLossDb instead.
+ *
+ * The resulting tx_height / rx_height are AGL (Above Ground Level) values
+ * that SPLAT! adds to the elevation reported by the active DEM tile. When
+ * the DEM is a DSM (SRTM, Copernicus), that elevation already includes
+ * canopy/buildings, so AGL is effectively above the canopy. With FABDEM
+ * (DTM) it's above bare earth. The UI surfaces this trade-off via the
+ * Terrain & Clutter panel — there is no automatic adjustment here.
  */
 export function nodeToSplatParams(node: MeshNode, shared?: SharedSettings): SplatParams {
   const effectiveHeight =
@@ -55,7 +64,7 @@ export function nodeToSplatParams(node: MeshNode, shared?: SharedSettings): Spla
     },
     receiver: {
       rx_sensitivity: node.rxSensitivityDbm,
-      rx_height: node.antennaHeight,
+      rx_height: effectiveHeight,
       rx_gain: node.rxGainDbi,
       rx_loss: node.rxLossDb + extraLoss,
     },

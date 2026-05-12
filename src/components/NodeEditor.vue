@@ -68,15 +68,25 @@
     <!-- Essential parameters (always visible) -->
     <div class="row g-2 mt-2">
       <div class="col-6">
-        <label class="form-label">Antenna Height (m)</label>
+        <label class="form-label" :title="antennaHeightHelp">
+          Antenna Height (m)
+          <span class="text-muted small">AGL</span>
+        </label>
         <input
           type="number"
           class="form-control form-control-sm"
           :value="node.antennaHeight"
           min="0.5"
           step="0.5"
+          :title="antennaHeightHelp"
           @input="nodesStore.updateNode(node!.id, { antennaHeight: parseFloat(($event.target as HTMLInputElement).value) })"
         />
+        <div class="form-text small">
+          Height above ground.
+          <span v-if="dsmWarning" class="text-warning">
+            DEM is a DSM — value is interpreted above canopy/buildings.
+          </span>
+        </div>
       </div>
       <div class="col-6">
         <label class="form-label">Hop Limit</label>
@@ -217,6 +227,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useNodesStore } from '../stores/nodesStore'
+import { useSitesStore } from '../stores/sitesStore'
 import DevicePresetSelector from './DevicePresetSelector.vue'
 import ChannelPresetSelector from './ChannelPresetSelector.vue'
 import InstallationConfig from './InstallationConfig.vue'
@@ -226,9 +237,28 @@ import type { ChannelPresetId } from '../types/index'
 defineEmits<{ runCoverage: [nodeId: string] }>()
 
 const nodesStore = useNodesStore()
+const sitesStore = useSitesStore()
 const node = computed(() => nodesStore.selectedNode)
 const showAdvanced = ref(false)
 const fetchingAltitude = ref(false)
+
+const antennaHeightHelp =
+  'Antenna height above ground (AGL) in metres. SPLAT! adds this to the ' +
+  'terrain elevation reported by the active DEM. With a DSM (SRTM, Copernicus) ' +
+  'the elevation already includes canopy/buildings, so the value sits above ' +
+  'the canopy. With FABDEM (DTM) it sits above bare earth. Portable/window ' +
+  'installs apply a sheltering factor (×0.8 / ×0.9) to this value.'
+
+// DSM datasets where the AGL is interpreted above canopy/buildings rather
+// than above bare earth. Signal the user so they can pick FABDEM if exact
+// ground-relative height matters for their study.
+const DSM_SOURCES = new Set(['srtm', 'copernicus'])
+const dsmWarning = computed(() => {
+  const src = sitesStore.splatParams.terrain?.dem_source
+  // Empty string = "use server default" — we can't tell from the client
+  // whether that resolves to a DSM or DTM, so we don't show the warning.
+  return src ? DSM_SOURCES.has(src) : false
+})
 
 async function fetchAltitude() {
   if (!node.value) return
