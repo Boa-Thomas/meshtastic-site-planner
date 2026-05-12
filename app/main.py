@@ -18,7 +18,7 @@ from app.redis_config import get_redis_client
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.staticfiles import StaticFiles
+from app.static_files import PrecompressedStaticFiles
 from uuid import uuid4, UUID
 from starlette.requests import Request
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -483,4 +483,4 @@ async def get_result(task_id: UUID):
     logger.info(f"Task {tid} is still processing.")
     return JSONResponse({"status": "processing"})
 
-app.mount("/", StaticFiles(directory="app/ui", html=True), name="ui")
+app.mount("/", PrecompressedStaticFiles(directory="app/ui", html=True), name="ui")
