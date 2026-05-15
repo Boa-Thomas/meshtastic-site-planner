@@ -856,7 +856,7 @@ class Splat(PropagationEngine):
         disk_key = self._disk_key(tile_name)
         if disk_key in self.tile_cache:
             logger.info(f"Cache hit (disk): {disk_key}")
-            inc(srtm_cache_events_total, tier="disk", event="hit")
+            inc(srtm_cache_events_total, tier="disk", event="hit", source=self.dem_source)
             return self.tile_cache[disk_key]
 
         redis_key = self.tile_redis_key(tile_name)
@@ -865,13 +865,13 @@ class Splat(PropagationEngine):
                 cached = self._redis_tile_cache.get(redis_key)
                 if cached:
                     logger.info(f"Cache hit (redis): {disk_key}")
-                    inc(srtm_cache_events_total, tier="redis", event="hit")
+                    inc(srtm_cache_events_total, tier="redis", event="hit", source=self.dem_source)
                     self.tile_cache[disk_key] = cached
                     return cached
             except Exception as e:
                 logger.debug(f"Redis HGT cache read failed for {disk_key}: {e}")
 
-        inc(srtm_cache_events_total, tier="s3", event="miss")
+        inc(srtm_cache_events_total, tier="s3", event="miss", source=self.dem_source)
 
         if self.dem_source == "copernicus":
             tile_data = self._download_copernicus_tile(tile_name)
