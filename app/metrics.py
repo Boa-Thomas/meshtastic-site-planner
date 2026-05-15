@@ -48,8 +48,8 @@ simulation_duration_seconds = _make_metric(
 srtm_cache_events_total = _make_metric(
     Counter,
     "srtm_cache_events_total",
-    "SRTM tile cache events (hit/miss/store) by tier",
-    labelnames=("tier", "event"),
+    "DEM tile cache events (hit/miss/store) by tier and source",
+    labelnames=("tier", "event", "source"),
 )
 
 splat_subprocess_duration_seconds = _make_metric(
